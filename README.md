@@ -1,13 +1,5 @@
 # AWS Capstone Project: Highly Available Web Application with Serverless Visitor Tracking
 
-
-
-Intermediate AWS Project
-
-Hands-on Deployment
-
-
-
 ## 1. Project title
 
 Design and Deploy a Highly Available, Scalable and Secure Web Application on AWS with Serverless Visitor Tracking
