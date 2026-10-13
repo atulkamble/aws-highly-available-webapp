@@ -1,3 +1,44 @@
+# AWS Capstone: Highly Available Web Application with Visitor Counter
+
+## Objective
+Deploy an HTTP website on EC2 behind an Application Load Balancer with Auto Scaling across two Availability Zones. Each page view invokes Lambda, which atomically increments a DynamoDB counter.
+
+## Deploy
+Prerequisites: AWS CLI configured, CloudFormation/IAM/EC2/ELB/Lambda/DynamoDB permissions, two available AZs, and an account with sufficient EC2 quotas.
+
+```bash
+aws cloudformation validate-template --template-body file://infra/template.yaml
+aws cloudformation deploy --stack-name aws-capstone --template-file infra/template.yaml --capabilities CAPABILITY_IAM --region us-east-1
+aws cloudformation describe-stacks --stack-name aws-capstone --query 'Stacks[0].Outputs' --region us-east-1
+```
+Open the WebsiteURL output in a browser; allow a few minutes for EC2 health checks. Refresh to increment the counter.
+
+## Architecture and boundaries
+Internet -> public ALB -> EC2 Auto Scaling (two public subnets) -> Lambda -> DynamoDB.
+This is a **deployable teaching lab**, not the full private-subnet production design in the accompanying project brief. Instances use public subnets to simplify package installation; their security group restricts inbound app traffic to the ALB, and there is no SSH ingress. The project brief describes a recommended extension with private EC2, NAT, RDS MySQL, Route 53, S3, CloudWatch alarms/SNS, and HTTPS/ACM. These extensions are **not provisioned** by this template.
+
+Security: Use HTTPS/ACM before accepting real users or sensitive data. The counter counts page requests, not unique visitors; it has no anti-bot or abuse protection. AWS charges apply. IAM privileges for deployment must be scoped appropriately.
+
+## Test
+```bash
+curl -i "$(aws cloudformation describe-stacks --stack-name aws-capstone --region us-east-1 --query 'Stacks[0].Outputs[?OutputKey==`WebsiteURL`].OutputValue' --output text)"
+aws dynamodb get-item --table-name "$(aws cloudformation describe-stacks --stack-name aws-capstone --region us-east-1 --query 'Stacks[0].Outputs[?OutputKey==`DynamoDBTable`].OutputValue' --output text)" --key '{"counter_id":{"S":"homepage"}}' --region us-east-1
+```
+
+## Clean up
+```bash
+aws cloudformation delete-stack --stack-name aws-capstone --region us-east-1
+aws cloudformation wait stack-delete-complete --stack-name aws-capstone --region us-east-1
+```
+
+## Student extensions
+1. Move EC2 to private subnets and add NAT or VPC endpoints.
+2. Add RDS MySQL in private DB subnets and implement a products table.
+3. Add Route 53 alias and ACM HTTPS listener.
+4. Store static assets in private S3 with appropriate access controls.
+5. Add CloudWatch alarms, SNS subscription and CloudTrail logging.
+6. Add RDS backups, S3 versioning, and cost controls.
+
 # AWS Capstone Project: Highly Available Web Application with Serverless Visitor Tracking
 
 ## 1. Project title
