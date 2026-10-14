@@ -1,145 +1,211 @@
-# AWS Capstone: Highly Available Web Application with Visitor Counter
+# AWS Highly Available Web Application with Visitor Counter
 
-## Objective
-Deploy an HTTP website on EC2 behind an Application Load Balancer with Auto Scaling across two Availability Zones. Each page view invokes Lambda, which atomically increments a DynamoDB counter.
+## 1. Title
 
-## Deploy
-Prerequisites: AWS CLI configured, CloudFormation/IAM/EC2/ELB/Lambda/DynamoDB permissions, two available AZs, and an account with sufficient EC2 quotas.
+AWS Highly Available Web Application with Visitor Counter and Serverless Tracking
 
-```bash
-aws cloudformation validate-template --template-body file://infra/template.yaml
-aws cloudformation deploy --stack-name aws-capstone --template-file infra/template.yaml --capabilities CAPABILITY_IAM --region us-east-1
-aws cloudformation describe-stacks --stack-name aws-capstone --query 'Stacks[0].Outputs' --region us-east-1
+This project demonstrates how to design and deploy a resilient application on AWS using a public-facing Application Load Balancer, EC2 instances in multiple Availability Zones, Lambda-based serverless logic, and DynamoDB for tracking page visits. The solution is provisioned through AWS CloudFormation and is intended as a practical cloud architecture and DevOps learning project.
+
+## 2. Objectives
+
+The main objectives of this project are:
+
+- Build a highly available AWS-based web application architecture.
+- Deploy web servers in multiple Availability Zones behind a load balancer.
+- Use Auto Scaling to handle traffic changes automatically.
+- Trigger serverless logic from the application to count visitors.
+- Store counter data in DynamoDB with an atomic update pattern.
+- Provision infrastructure with Infrastructure as Code using CloudFormation.
+- Validate deployment using health checks and sample requests.
+- Extend the solution with future production-grade security and monitoring features.
+
+## 3. Project Overview
+
+The application exposes a simple website hosted by EC2 instances. Each request invokes an AWS Lambda function that updates a visitor counter value in DynamoDB. The Application Load Balancer distributes traffic across healthy EC2 instances across two Availability Zones, giving the project a highly available front-end layer.
+
+The current implementation is intentionally simplified for a classroom or capstone environment. It focuses on core AWS services and architecture patterns rather than implementing a full production security stack.
+
+## 4. Future Scope
+
+This project can be extended into a more enterprise-ready production system. Recommended future enhancements include:
+
+- Move EC2 instances into private subnets and add NAT Gateway / VPC endpoints.
+- Add Route 53 and ACM for custom domain and HTTPS support.
+- Store data in RDS MySQL for relational application use cases.
+- Store static content in Amazon S3 with secure access controls.
+- Add CloudWatch dashboards, alarms, and SNS notifications.
+- Enable CloudTrail and centralized auditing.
+- Add WAF protection and security group hardening.
+- Implement CI/CD pipelines for automated deployments.
+- Add monitoring for latency, error rates, and cost optimization.
+
+## 5. Architecture Diagram
+
+The project architecture is represented in the repository diagram: [architecture.svg](./architecture.svg).
+
+```mermaid
+flowchart LR
+    User[Internet User] --> ALB[Application Load Balancer]
+    ALB --> ASG[EC2 Auto Scaling Group]
+    ASG --> APP[Python Web Server on EC2]
+    APP --> LAMBDA[AWS Lambda]
+    LAMBDA --> DDB[DynamoDB Visitor Counter]
+
+    subgraph AZA[Availability Zone A]
+        EC2A[EC2 Instance]
+    end
+
+    subgraph AZB[Availability Zone B]
+        EC2B[EC2 Instance]
+    end
+
+    ASG --> EC2A
+    ASG --> EC2B
 ```
-Open the WebsiteURL output in a browser; allow a few minutes for EC2 health checks. Refresh to increment the counter.
 
-## Architecture and boundaries
-Internet -> public ALB -> EC2 Auto Scaling (two public subnets) -> Lambda -> DynamoDB.
-This is a **deployable teaching lab**, not the full private-subnet production design in the accompanying project brief. Instances use public subnets to simplify package installation; their security group restricts inbound app traffic to the ALB, and there is no SSH ingress. The project brief describes a recommended extension with private EC2, NAT, RDS MySQL, Route 53, S3, CloudWatch alarms/SNS, and HTTPS/ACM. These extensions are **not provisioned** by this template.
+This simplified design emphasizes:
 
-Security: Use HTTPS/ACM before accepting real users or sensitive data. The counter counts page requests, not unique visitors; it has no anti-bot or abuse protection. AWS charges apply. IAM privileges for deployment must be scoped appropriately.
+- internet-facing ALB for request distribution,
+- EC2 instances running the web application,
+- serverless Lambda for incrementing the visitor count,
+- DynamoDB as the storage layer,
+- Auto Scaling for resilience and traffic handling.
 
-## Test
-```bash
-curl -i "$(aws cloudformation describe-stacks --stack-name aws-capstone --region us-east-1 --query 'Stacks[0].Outputs[?OutputKey==`WebsiteURL`].OutputValue' --output text)"
-aws dynamodb get-item --table-name "$(aws cloudformation describe-stacks --stack-name aws-capstone --region us-east-1 --query 'Stacks[0].Outputs[?OutputKey==`DynamoDBTable`].OutputValue' --output text)" --key '{"counter_id":{"S":"homepage"}}' --region us-east-1
-```
+## 6. AWS Services Used
 
-## Clean up
-```bash
-aws cloudformation delete-stack --stack-name aws-capstone --region us-east-1
-aws cloudformation wait stack-delete-complete --stack-name aws-capstone --region us-east-1
-```
+| AWS Service | Purpose |
+| --- | --- |
+| VPC | Creates isolated network boundaries for resources |
+| EC2 | Hosts the web application |
+| Application Load Balancer | Balances traffic across multiple EC2 instances |
+| Auto Scaling Group | Maintains capacity and availability |
+| Lambda | Runs serverless visitor-tracking logic |
+| DynamoDB | Stores page visit counts |
+| IAM | Provides least-privilege access |
+| CloudFormation | Provisions the architecture as code |
+| Amazon SSM Parameter Store | Supplies the Linux AMI in the template |
 
-## Student extensions
-1. Move EC2 to private subnets and add NAT or VPC endpoints.
-2. Add RDS MySQL in private DB subnets and implement a products table.
-3. Add Route 53 alias and ACM HTTPS listener.
-4. Store static assets in private S3 with appropriate access controls.
-5. Add CloudWatch alarms, SNS subscription and CloudTrail logging.
-6. Add RDS backups, S3 versioning, and cost controls.
+## 7. Project Structure
 
-# AWS Capstone Project: Highly Available Web Application with Serverless Visitor Tracking
-
-## 1. Project title
-
-Design and Deploy a Highly Available, Scalable and Secure Web Application on AWS with Serverless Visitor Tracking
-
-This project combines AWS services from your training syllabus into one practical, real-world architecture. It covers networking, compute, load balancing, auto scaling, database management, serverless computing, monitoring, security and Infrastructure as Code.
-
-## 2. Project objectives
-
-1. Design a custom AWS VPC with public and private subnets.
-2. Deploy web servers using Amazon EC2 and Auto Scaling.
-3. Distribute incoming traffic using an Application Load Balancer.
-4. Configure Route 53 for domain-based access.
-5. Store application data in Amazon RDS MySQL.
-6. Track website visitors using AWS Lambda and DynamoDB.
-7. Store static assets in Amazon S3.
-8. Monitor infrastructure using Amazon CloudWatch.
-9. Configure SNS notifications for operational alerts.
-10. Automate infrastructure deployment using AWS CloudFormation.
-
-## 3. Real-world use case
-
-Scenario: A company wants to host a product website that can handle increasing visitor traffic without manually adding servers.
-
-When customers visit the website, the application should display product information, retrieve database records, record visits, and remain available even when an individual server fails.
-
-The company also wants automatic scaling, secure networking, monitoring and a repeatable deployment process.
-
-## 4. Project architecture
-
-Logical architecture. The ALB is deployed in public subnets, while EC2 instances and RDS are private. Lambda and DynamoDB represent the visitor-tracking component.
-
-Additional supporting services: S3 for static assets, CloudWatch for monitoring, SNS for notifications, IAM for access control, CloudTrail for auditing, and CloudFormation for provisioning.
-
-## 5. AWS services used and why
-
-| AWS service               | Purpose and significance                                   |
-| ------------------------- | ---------------------------------------------------------- |
-| VPC                       | Provides an isolated networking environment                |
-| Public/private subnets    | Separate internet-facing and internal resources            |
-| Internet Gateway          | Enables internet connectivity for public resources         |
-| NAT Gateway               | Provides outbound internet access to private EC2 instances |
-| EC2                       | Hosts the web application                                  |
-| Application Load Balancer | Distributes HTTP traffic across healthy servers            |
-| Auto Scaling              | Automatically adjusts EC2 capacity                         |
-| Route 53                  | Maps the website domain to the ALB                         |
-| RDS MySQL                 | Stores relational application data                         |
-| Lambda                    | Runs visitor-tracking logic without managing servers       |
-| DynamoDB                  | Stores visitor counters using a NoSQL database             |
-| S3                        | Stores static website assets                               |
-| IAM                       | Controls service permissions                               |
-| CloudWatch                | Collects metrics, logs and alarms                          |
-| SNS                       | Sends notifications                                        |
-| CloudTrail                | Records AWS API activity                                   |
-| CloudFormation            | Deploys infrastructure from code                           |
-
-## 6. Application workflow
-
-1. User opens `www.example.com`.
-2. Route 53 resolves the domain to the Application Load Balancer.
-3. ALB forwards the request to a healthy EC2 instance.
-4. The web application retrieves product information from RDS MySQL.
-5. The application invokes Lambda to update the visitor count in DynamoDB.
-6. The web page displays product details and the visitor count.
-7. Auto Scaling adjusts EC2 capacity based on configured demand metrics.
-8. CloudWatch monitors resources and triggers SNS alerts when alarm thresholds are met.
-
-## 7. Project code and deployment
-
-I have prepared a downloadable starter project containing a working CloudFormation lab for EC2, Application Load Balancer, Auto Scaling, Lambda and DynamoDB.
-
-AWS Capstone Project
-
-ZIP · CloudFormation YAML, Python application and README
-
-&#x20;Download Project ZIP
-
-### Project folder structure
-
-```
-aws-capstone/
+```text
+aws-highly-available-webapp/
 ├── README.md
+├── LICENSE
+├── architecture.svg
+├── aws_capstone_full_document.docx
+├── app/
+│   └── server.py
 ├── infra/
 │   └── template.yaml
-└── app/
-    └── server.py
+└── scripts/
+    ├── deploy.sh
+    ├── test.sh
+    └── cleanup.sh
 ```
 
-### Deployment commands
+## 8. Core Application Code
 
-Step 1 — Validate the template
+The web server in [app/server.py](./app/server.py) responds to HTTP requests and invokes the Lambda counter function. A simplified view of the implementation is shown below:
 
+```python
+import os, json, boto3
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import urlparse
+
+lambda_client = boto3.client('lambda', region_name=os.environ.get('AWS_REGION','us-east-1'))
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if urlparse(self.path).path == '/health':
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b'ok')
+            return
+
+        count = 'unavailable'
+        try:
+            response = lambda_client.invoke(
+                FunctionName=os.environ['COUNTER_FUNCTION'],
+                InvocationType='RequestResponse',
+                Payload=b'{}'
+            )
+            result = json.loads(response['Payload'].read())
+            count = result.get('count', 'unavailable')
+        except Exception as e:
+            print('Visitor counter failed:', repr(e), flush=True)
+
+        body = f'''<!doctype html><html>...'''.encode()
+        self.send_response(200)
+        self.send_header('Content-Type', 'text/html; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+ThreadingHTTPServer(('0.0.0.0', 8080), Handler).serve_forever()
 ```
-aws cloudformation validate-template \
-  --template-body file://infra/template.yaml
+
+The backend Lambda logic is defined in the CloudFormation stack and performs an atomic `UpdateItem` operation against DynamoDB.
+
+## 9. Infrastructure Code
+
+The Infrastructure as Code definition in [infra/template.yaml](./infra/template.yaml) creates the core networking and application resources. The template provisions:
+
+- VPC and public subnets in two Availability Zones
+- Internet Gateway and route table
+- Application Load Balancer
+- EC2 Launch Template and Auto Scaling Group
+- Lambda function and DynamoDB table
+- IAM roles and instance profile
+- Output values such as the site URL and DynamoDB table name
+
+```yaml
+Resources:
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.20.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Scheme: internet-facing
+      Type: application
+      SecurityGroups: [!Ref ALBSG]
+      Subnets: [!Ref PublicSubnet1, !Ref PublicSubnet2]
+
+  CounterFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt LambdaRole.Arn
+      Environment:
+        Variables: {TABLE_NAME: !Ref CounterTable}
 ```
 
-Step 2 — Deploy the infrastructure
+## 10. Deployment Steps
 
+Follow the steps below to deploy the stack.
+
+### Step 1: Configure AWS credentials
+
+```bash
+aws configure
 ```
+
+Ensure that your user or role has permission to work with CloudFormation, EC2, Lambda, DynamoDB, IAM, and Elastic Load Balancing.
+
+### Step 2: Validate the CloudFormation template
+
+```bash
+aws cloudformation validate-template --template-body file://infra/template.yaml --region us-east-1
+```
+
+### Step 3: Deploy the infrastructure
+
+```bash
 aws cloudformation deploy \
   --stack-name aws-capstone \
   --template-file infra/template.yaml \
@@ -147,43 +213,96 @@ aws cloudformation deploy \
   --region us-east-1
 ```
 
-Step 3 — Retrieve the website URL
+### Step 4: Retrieve deployment outputs
 
-```
+```bash
 aws cloudformation describe-stacks \
   --stack-name aws-capstone \
   --query 'Stacks[0].Outputs' \
   --region us-east-1
 ```
 
-Step 4 — Test the application
+### Step 5: Access the application
 
-Open the website URL and refresh the page. The Lambda function increments the visitor counter in DynamoDB.
+Open the `WebsiteURL` output in a browser and refresh the page. The visitor count will update as the Lambda function writes to DynamoDB.
 
-Step 5 — Delete resources after practice
+### Step 6: Clean up the stack
 
+```bash
+aws cloudformation delete-stack --stack-name aws-capstone --region us-east-1
+aws cloudformation wait stack-delete-complete --stack-name aws-capstone --region us-east-1
 ```
-aws cloudformation delete-stack \
+
+## 11. Automation Scripts
+
+The repository includes deployment, validation, and cleanup helper scripts in the [scripts/](./scripts) directory.
+
+### Deploy the project
+
+```bash
+./scripts/deploy.sh
+```
+
+### Test the application and DynamoDB counter
+
+```bash
+./scripts/test.sh
+```
+
+### Delete the CloudFormation stack
+
+```bash
+./scripts/cleanup.sh
+```
+
+Script content includes the same AWS CLI commands shown in the manual steps and is intended to reduce repeated command entry during testing.
+
+## 12. Testing and Verification
+
+After deployment, verify the system works in two ways:
+
+1. Request the website through the ALB URL.
+2. Check the DynamoDB counter item to confirm the visitor count increased.
+
+```bash
+curl -i "$(aws cloudformation describe-stacks \
   --stack-name aws-capstone \
+  --region us-east-1 \
+  --query 'Stacks[0].Outputs[?OutputKey==`WebsiteURL`].OutputValue' \
+  --output text)"
+
+aws dynamodb get-item \
+  --table-name "$(aws cloudformation describe-stacks \
+    --stack-name aws-capstone \
+    --region us-east-1 \
+    --query 'Stacks[0].Outputs[?OutputKey==`DynamoDBTable`].OutputValue' \
+    --output text)" \
+  --key '{"counter_id":{"S":"homepage"}}' \
   --region us-east-1
 ```
 
-## 8. Project implementation phases
+## 13. Security and Operational Notes
 
-| Phase | Implementation                 | Expected result                      |
-| ----- | ------------------------------ | ------------------------------------ |
-| 1     | VPC, subnets and routing       | Network configured                   |
-| 2     | EC2, ALB and Auto Scaling      | Highly available website             |
-| 3     | Lambda and DynamoDB            | Visitor counter working              |
-| 4     | RDS MySQL and S3               | Database and static storage          |
-| 5     | Route 53 and HTTPS             | Domain-based secure access           |
-| 6     | CloudWatch, SNS and CloudTrail | Monitoring, alerts and auditing      |
-| 7     | CloudFormation and testing     | Repeatable infrastructure deployment |
+This lab is intentionally simplified and should not be treated as a production-ready environment without additional hardening. The current design uses public subnets for ease of deployment and learning. It is recommended to add the following before using the architecture in a real-world environment:
 
-Implementation note: The downloadable code covers phases 1–3 as a simplified lab, using public-subnet EC2 instances. Phases 4–7 are planned extensions for the full architecture. The starter project has not been deployed or live-tested in an AWS account. AWS usage charges may apply.
+- HTTPS with ACM and a custom domain
+- private subnets and NAT configuration
+- WAF protection
+- role-scoped IAM policies
+- CloudWatch alarm dashboards and SNS notifications
+- backup and retention controls for all data stores
 
-## 9. Expected learning outcomes
+## 14. References
 
-After completing the full project, students should be able to explain and demonstrate AWS networking, high availability, auto scaling, relational and NoSQL databases, serverless integration, infrastructure automation, security and monitoring.
+- [architecture.svg](./architecture.svg)
+- [aws_capstone_full_document.docx](./aws_capstone_full_document.docx)
+- AWS CloudFormation User Guide
+- AWS EC2 Auto Scaling Documentation
+- AWS Elastic Load Balancing Documentation
+- AWS Lambda Developer Guide
+- Amazon DynamoDB Developer Guide
+- AWS Identity and Access Management Documentation
 
-Recommended final deliverables: Architecture diagram, source code, deployed website URL, infrastructure screenshots, test results and a short project demonstration.
+## 15. Conclusion
+
+This project provides a clean introduction to building a highly available AWS application with a serverless data-processing component. It blends foundational cloud services, infrastructure automation, and web application deployment into a single, practical use case suitable for learning, demonstrations, and capstone-style implementation.
