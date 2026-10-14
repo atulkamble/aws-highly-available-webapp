@@ -1,0 +1,29 @@
+#!/bin/bash
+set -euxo pipefail
+
+dnf install -y python3 python3-pip
+python3 -m pip install --ignore-installed --no-cache-dir boto3
+mkdir -p /opt/capstone
+cat > /opt/capstone/server.py <<'PY'
+${app_source}
+PY
+
+cat > /etc/systemd/system/capstone.service <<'SERVICE'
+[Unit]
+Description=AWS highly available web application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Environment="AWS_REGION=${aws_region}"
+Environment="COUNTER_FUNCTION=${counter_function}"
+ExecStart=/usr/bin/python3 /opt/capstone/server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+systemctl daemon-reload
+systemctl enable --now capstone

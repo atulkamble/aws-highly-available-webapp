@@ -1,20 +1,16 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-STACK_NAME="${STACK_NAME:-aws-capstone}"
 REGION="${AWS_REGION:-us-east-1}"
+INFRA_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../infra" && pwd)"
 
-WEBSITE_URL=$(aws cloudformation describe-stacks \
-  --stack-name "$STACK_NAME" \
-  --region "$REGION" \
-  --query 'Stacks[0].Outputs[?OutputKey==`WebsiteURL`].OutputValue' \
-  --output text)
+command -v terraform >/dev/null 2>&1 || {
+  printf 'Error: Terraform is required but was not found in PATH.\n' >&2
+  exit 1
+}
 
-TABLE_NAME=$(aws cloudformation describe-stacks \
-  --stack-name "$STACK_NAME" \
-  --region "$REGION" \
-  --query 'Stacks[0].Outputs[?OutputKey==`DynamoDBTable`].OutputValue' \
-  --output text)
+WEBSITE_URL="$(terraform -chdir="$INFRA_DIR" output -raw website_url)"
+TABLE_NAME="$(terraform -chdir="$INFRA_DIR" output -raw dynamodb_table_name)"
 
 printf 'Testing application URL: %s\n' "$WEBSITE_URL"
 curl -fsS "$WEBSITE_URL"

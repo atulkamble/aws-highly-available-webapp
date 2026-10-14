@@ -3,22 +3,21 @@ set -euo pipefail
 
 STACK_NAME="${STACK_NAME:-aws-capstone}"
 REGION="${AWS_REGION:-us-east-1}"
+INFRA_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../infra" && pwd)"
 
-printf 'Validating CloudFormation template...\n'
-aws cloudformation validate-template \
-  --template-body file://infra/template.yaml \
-  --region "$REGION"
+command -v terraform >/dev/null 2>&1 || {
+  printf 'Error: Terraform is required but was not found in PATH.\n' >&2
+  exit 1
+}
+
+printf 'Initializing Terraform...\n'
+terraform -chdir="$INFRA_DIR" init
 
 printf 'Deploying stack %s in %s...\n' "$STACK_NAME" "$REGION"
-aws cloudformation deploy \
-  --stack-name "$STACK_NAME" \
-  --template-file infra/template.yaml \
-  --capabilities CAPABILITY_IAM \
-  --region "$REGION"
+terraform -chdir="$INFRA_DIR" apply \
+  -auto-approve \
+  -var="project_name=$STACK_NAME" \
+  -var="aws_region=$REGION"
 
-printf 'Retrieving deployment outputs...\n'
-aws cloudformation describe-stacks \
-  --stack-name "$STACK_NAME" \
-  --query 'Stacks[0].Outputs' \
-  --region "$REGION" \
-  --output table
+printf 'Deployment outputs:\n'
+terraform -chdir="$INFRA_DIR" output
