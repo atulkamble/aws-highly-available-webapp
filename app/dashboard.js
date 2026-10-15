@@ -11,22 +11,6 @@ const fields = {
   health: document.getElementById("application-health"),
 };
 
-const backgroundVideo = document.querySelector(".background-video");
-const motionPreference = window.matchMedia("(prefers-reduced-motion: reduce)");
-
-function syncBackgroundVideo() {
-  if (motionPreference.matches) {
-    backgroundVideo.pause();
-    return;
-  }
-  backgroundVideo.play().catch(() => {
-    backgroundVideo.hidden = true;
-  });
-}
-
-motionPreference.addEventListener("change", syncBackgroundVideo);
-syncBackgroundVideo();
-
 function formatUptime(totalSeconds) {
   const days = Math.floor(totalSeconds / 86400);
   const hours = Math.floor((totalSeconds % 86400) / 3600);
@@ -38,6 +22,18 @@ function formatUptime(totalSeconds) {
   if (minutes || hours || days) parts.push(`${minutes}m`);
   parts.push(`${seconds}s`);
   return parts.join(" ");
+}
+
+function updateCountdown() {
+  const now = new Date();
+  const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const remainingSeconds = Math.max(0, Math.floor((midnight - now) / 1000));
+  const hours = Math.floor(remainingSeconds / 3600);
+  const minutes = Math.floor((remainingSeconds % 3600) / 60);
+  const seconds = remainingSeconds % 60;
+  document.getElementById("countdown-hours").textContent = String(hours).padStart(2, "0");
+  document.getElementById("countdown-minutes").textContent = String(minutes).padStart(2, "0");
+  document.getElementById("countdown-seconds").textContent = String(seconds).padStart(2, "0");
 }
 
 async function refreshStatus() {
@@ -55,13 +51,46 @@ async function refreshStatus() {
     fields.uptime.textContent = formatUptime(status.uptime_seconds);
     fields.requests.textContent = status.page_requests.toLocaleString();
     fields.version.textContent = status.app_version;
-    fields.status.textContent = "Application online";
-    fields.health.textContent = "Healthy";
+    fields.status.textContent = "Event registration open";
+    fields.health.textContent = "Application status: online";
   } catch (_error) {
-    fields.status.textContent = "Status unavailable";
-    fields.health.textContent = "Retrying";
+    fields.status.textContent = "Event registration open";
+    fields.health.textContent = "Application status: status unavailable";
   }
 }
 
+const registrationForm = document.getElementById("registration-form");
+const registrationMessage = document.getElementById("registration-message");
+
+registrationForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const submitButton = registrationForm.querySelector("button[type='submit']");
+  const formData = new FormData(registrationForm);
+  const registration = Object.fromEntries(formData.entries());
+  submitButton.disabled = true;
+  registrationMessage.classList.remove("is-error");
+  registrationMessage.textContent = "Submitting your registration…";
+
+  try {
+    const response = await fetch("/api/register", {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(registration),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || "Registration could not be completed.");
+    registrationMessage.textContent = result.message;
+    registrationForm.reset();
+  } catch (error) {
+    registrationMessage.classList.add("is-error");
+    registrationMessage.textContent = error.message || "Unable to submit your registration. Please try again.";
+  } finally {
+    submitButton.disabled = false;
+  }
+});
+
+updateCountdown();
+window.setInterval(updateCountdown, 1000);
 refreshStatus();
 window.setInterval(refreshStatus, 5000);

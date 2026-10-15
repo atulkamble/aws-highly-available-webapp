@@ -35,6 +35,7 @@ Wants=network-online.target
 Environment="AWS_REGION=${aws_region}"
 Environment="APP_VERSION=${app_bundle_hash}"
 Environment="COUNTER_FUNCTION=${counter_function}"
+Environment="REGISTRATION_TABLE=${registration_table}"
 ExecStart=/opt/capstone/.venv/bin/python /opt/capstone/app/server.py
 Restart=always
 RestartSec=5

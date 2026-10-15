@@ -2,12 +2,14 @@ import html
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import threading
 import time
 import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
@@ -24,6 +26,7 @@ class Settings:
     region: str
     app_version: str
     counter_function: str
+    registration_table: str = ""
 
     @classmethod
     def from_environment(cls):
@@ -41,6 +44,7 @@ class Settings:
             region=os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "local",
             app_version=os.environ.get("APP_VERSION", "development"),
             counter_function=os.environ.get("COUNTER_FUNCTION", "").strip(),
+            registration_table=os.environ.get("REGISTRATION_TABLE", "").strip(),
         )
 
 
@@ -135,76 +139,85 @@ PAGE_TEMPLATE = """<!doctype html>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#0b1020">
-  <meta name="description" content="Live view of a highly available AWS application.">
+  <meta name="theme-color" content="#172337">
+  <meta name="description" content="Register for the Flipkart Mobile Launch Event and midnight sale.">
   <link rel="stylesheet" href="/dashboard.css">
   <script src="/dashboard.js" defer></script>
-  <title>Cloudnautic | Availability Dashboard</title>
+  <title>Flipkart | Mobile Launch Event</title>
 </head>
 <body>
-  <video class="background-video" aria-hidden="true" tabindex="-1" muted loop playsinline preload="metadata">
-    <source src="https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4" type="video/mp4">
-  </video>
-  <div class="video-overlay" aria-hidden="true"></div>
   <div class="shell">
     <header class="topbar">
-      <a class="brand" href="/" aria-label="Cloudnautic availability dashboard">
-        <span class="brand-mark" aria-hidden="true">C</span>
-        <span class="brand-copy"><strong>cloudnautic</strong><span>AVAILABILITY LAB</span></span>
+      <a class="brand" href="/" aria-label="Flipkart Mobile Launch Event home">
+        <span class="brand-mark" aria-hidden="true">F</span>
+        <span class="brand-copy"><strong>Flipkart</strong><span>MOBILE LAUNCH EVENT</span></span>
       </a>
-      <span class="top-status"><span class="status-dot"></span><span id="app-status">Connecting</span></span>
+      <span class="top-status"><span class="status-dot"></span><span id="app-status">Event registration open</span></span>
     </header>
 
     <main>
       <section class="intro" aria-labelledby="page-title">
-        <span class="eyebrow"><span class="status-dot"></span> Live infrastructure view</span>
-        <h1 id="page-title">Built to stay<br><span>up and running.</span></h1>
-        <p>See which EC2 instance is serving you, where it lives, and how the application recovers across Availability Zones.</p>
+        <span class="eyebrow"><span class="status-dot"></span> YOU'RE INVITED</span>
+        <h1 id="page-title">A new phone.<br><span>A midnight moment.</span></h1>
+        <p>Be among the first to discover our latest mobile launch. Register now and get ready when the sale opens at 12:00 AM.</p>
       </section>
 
-      <section class="node-card" aria-labelledby="node-title">
-        <div class="node-heading">
-          <div>
-            <span class="section-kicker">CURRENT RESPONSE</span>
-            <h2 id="node-title">Serving instance</h2>
+      <section class="event-card" aria-labelledby="event-title">
+        <div class="event-copy">
+          <span class="section-kicker">THE COUNTDOWN IS ON</span>
+          <h2 id="event-title">Mobile Launch Event</h2>
+          <p>Exclusive launch offers go live at midnight.</p>
+          <div class="countdown" aria-label="Time until midnight sale starts">
+            <div class="countdown-unit"><strong id="countdown-hours">00</strong><span>HOURS</span></div>
+            <div class="countdown-separator" aria-hidden="true">:</div>
+            <div class="countdown-unit"><strong id="countdown-minutes">00</strong><span>MINUTES</span></div>
+            <div class="countdown-separator" aria-hidden="true">:</div>
+            <div class="countdown-unit"><strong id="countdown-seconds">00</strong><span>SECONDS</span></div>
           </div>
-          <span class="live-indicator"><span class="status-dot"></span> LIVE</span>
+          <span class="sale-time"><span aria-hidden="true">✦</span> SALE STARTS AT 12:00 AM LOCAL TIME</span>
         </div>
-        <div class="node-id" id="instance-id" aria-live="polite">Discovering instance…</div>
-        <div class="node-grid">
-          <div class="node-fact"><span>Availability zone</span><strong id="availability-zone">—</strong></div>
-          <div class="node-fact"><span>AWS region</span><strong id="region">—</strong></div>
-          <div class="node-fact"><span>Instance uptime</span><strong id="uptime">—</strong></div>
-          <div class="node-fact"><span>Page requests served here</span><strong id="page-requests">—</strong></div>
-        </div>
-        <p class="node-footnote">Values describe the instance that answered the latest status check. Refresh to see load-balancer routing in action.</p>
+        <div class="phone-art" aria-hidden="true"><div class="phone-screen"><span>NEW</span><strong>the<br>future<br>in your<br>hands.</strong><i></i></div></div>
       </section>
 
-      <section class="counter-card" aria-labelledby="counter-title">
-        <div>
-          <span class="section-kicker">PERSISTENT GLOBAL COUNT</span>
-          <h2 id="counter-title">Total page visits</h2>
-          <p class="counter-note">{{counter_message}}</p>
+      <section class="registration-card" aria-labelledby="registration-title">
+        <div class="registration-heading">
+          <span class="section-kicker">SAVE YOUR SPOT</span>
+          <h2 id="registration-title">Register for the launch</h2>
+          <p>Share your details to register for the Mobile Launch Event.</p>
         </div>
-        <div class="counter-value" id="total-visits" aria-live="polite">{{total_visits}}</div>
-        <span class="counter-source">Lambda + DynamoDB</span>
+        <form id="registration-form">
+          <label for="customer-name">Customer name</label>
+          <input id="customer-name" name="name" type="text" autocomplete="name" maxlength="100" required>
+          <label for="customer-address">Address</label>
+          <textarea id="customer-address" name="address" autocomplete="street-address" maxlength="300" rows="3" required></textarea>
+          <label for="customer-pincode">PIN code</label>
+          <input id="customer-pincode" name="pincode" type="text" inputmode="numeric" autocomplete="postal-code" pattern="[0-9]{6}" maxlength="6" aria-describedby="pincode-hint" required>
+          <span class="field-hint" id="pincode-hint">Enter your 6-digit Indian PIN code.</span>
+          <button class="register-button" type="submit">Register for the event <span aria-hidden="true">→</span></button>
+          <p class="form-message" id="registration-message" role="status" aria-live="polite"></p>
+          <p class="privacy-note">Your details are used to record your event registration.</p>
+        </form>
       </section>
 
-      <div class="section-heading"><span>Resilience at a glance</span><span>Live app telemetry</span></div>
-      <section class="services" aria-label="Application and AWS health">
-        <article class="service"><span class="service-icon">01</span><span class="service-copy"><strong>Application</strong><span id="application-health">Checking</span></span></article>
-        <article class="service"><span class="service-icon">02</span><span class="service-copy"><strong>Load balancer</strong><span>ALB health checks</span></span></article>
-        <article class="service"><span class="service-icon">03</span><span class="service-copy"><strong>Auto Scaling</strong><span>Self-healing capacity</span></span></article>
-        <article class="service"><span class="service-icon">04</span><span class="service-copy"><strong>Build version</strong><span id="app-version">—</span></span></article>
-      </section>
+      <details class="event-details">
+        <summary>Event details</summary>
+        <p>The sale opens at the next 12:00 AM in your device's local time. Registration details are stored securely for event administration.</p>
+      </details>
 
-      <section class="lab-note">
-        <span class="lab-icon" aria-hidden="true">↗</span>
-        <div><strong>Try the resilience demo</strong><p>Refresh this dashboard, then terminate one EC2 instance from the Auto Scaling group. The ALB should route to a healthy peer while Auto Scaling launches a replacement.</p></div>
+      <section class="platform-status" aria-label="Application status">
+        <span id="application-health">Application status: checking</span>
+        <span>Served by <strong id="instance-id">—</strong></span>
+        <span id="availability-zone">—</span>
+        <span id="region">—</span>
+        <span>Uptime <strong id="uptime">—</strong></span>
+        <span>Requests <strong id="page-requests">—</strong></span>
+        <span>Build <strong id="app-version">—</strong></span>
+        <span>Total visits <strong id="total-visits">{{total_visits}}</strong></span>
+        <span class="counter-note">{{counter_message}}</span>
       </section>
     </main>
 
-    <footer><span>Cloudnautic AWS Capstone</span><span>One request. One responding instance. Multi-AZ resilience.</span></footer>
+    <footer><span>Flipkart Mobile Launch Event</span><span>Sale opens at 12:00 AM local time</span></footer>
   </div>
 </body>
 </html>
@@ -216,6 +229,8 @@ class Handler(BaseHTTPRequestHandler):
     sys_version = ""
     runtime_state = None
     counter_client = None
+    registration_table = None
+    MAX_REGISTRATION_BODY = 8192
 
     def handle_one_request(self):
         self.request_id = uuid.uuid4().hex
@@ -236,8 +251,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header(
             "Content-Security-Policy",
             "default-src 'self'; style-src 'self'; script-src 'self'; "
-            "media-src https://interactive-examples.mdn.mozilla.net; "
-            "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+            "base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
         )
         super().end_headers()
 
@@ -320,6 +334,82 @@ class Handler(BaseHTTPRequestHandler):
             return
         self.send_error(404)
 
+    def do_POST(self):
+        if urlparse(self.path).path != "/api/register":
+            self.send_error(404)
+            return
+        if self.headers.get_content_type() != "application/json":
+            self._send_json(415, {"error": "Content-Type must be application/json"})
+            return
+        try:
+            content_length = int(self.headers.get("Content-Length", ""))
+        except ValueError:
+            self._send_json(400, {"error": "A valid Content-Length is required"})
+            return
+        if content_length < 1:
+            self._send_json(400, {"error": "Registration details are required"})
+            return
+        if content_length > self.MAX_REGISTRATION_BODY:
+            self._send_json(413, {"error": "Registration details are too large"})
+            return
+        try:
+            payload = json.loads(self.rfile.read(content_length))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            self._send_json(400, {"error": "Registration details must be valid JSON"})
+            return
+        if not isinstance(payload, dict):
+            self._send_json(400, {"error": "Registration details must be an object"})
+            return
+        registration = self._validate_registration(payload)
+        if registration is None:
+            self._send_json(
+                400,
+                {"error": "Enter a name, address, and valid 6-digit PIN code"},
+            )
+            return
+        if self.registration_table is None or not self.runtime_state.settings.registration_table:
+            LOGGER.error("registration_storage_unavailable")
+            self._send_json(503, {"error": "Registration is temporarily unavailable"})
+            return
+        try:
+            self.registration_table.put_item(
+                Item={
+                    "registration_id": uuid.uuid4().hex,
+                    **registration,
+                    "registered_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                }
+            )
+        except Exception as exc:
+            LOGGER.error(
+                "event_registration_failed",
+                extra={"event_data": {"error_type": type(exc).__name__}},
+            )
+            self._send_json(503, {"error": "Registration could not be saved. Please try again."})
+            return
+        LOGGER.info("event_registration_created")
+        self._send_json(201, {"status": "registered", "message": "You're registered for the event."})
+
+    @staticmethod
+    def _validate_registration(payload):
+        name = payload.get("name")
+        address = payload.get("address")
+        pincode = payload.get("pincode")
+        if not all(isinstance(value, str) for value in (name, address, pincode)):
+            return None
+        name = name.strip()
+        address = address.strip()
+        pincode = pincode.strip()
+        if (
+            not name
+            or len(name) > 100
+            or not address
+            or len(address) > 300
+            or re.search(r"[\x00-\x08\x0b-\x1f\x7f]", name + address)
+            or re.fullmatch(r"[0-9]{6}", pincode) is None
+        ):
+            return None
+        return {"name": name, "address": address, "pincode": pincode}
+
     def _increment_visits(self):
         state = self.runtime_state
         if self.counter_client is None or not state.settings.counter_function:
@@ -381,23 +471,33 @@ def main():
 
     metadata = load_instance_metadata()
     Handler.runtime_state = RuntimeState(settings, metadata)
-    if settings.counter_function:
+    if settings.counter_function or settings.registration_table:
         from botocore.config import Config
         import boto3
 
+        aws_config = Config(
+            connect_timeout=2,
+            read_timeout=15,
+            retries={"total_max_attempts": 1},
+            max_pool_connections=50,
+            user_agent_extra="aws-ha-webapp/1.0",
+        )
+    else:
+        aws_config = None
+    if settings.counter_function:
         Handler.counter_client = boto3.client(
             "lambda",
             region_name=settings.region,
-            config=Config(
-                connect_timeout=2,
-                read_timeout=15,
-                retries={"total_max_attempts": 1},
-                max_pool_connections=50,
-                user_agent_extra="aws-ha-webapp/1.0",
-            ),
+            config=aws_config,
         )
     else:
         Handler.counter_client = None
+    if settings.registration_table:
+        Handler.registration_table = boto3.resource(
+            "dynamodb", region_name=settings.region, config=aws_config
+        ).Table(settings.registration_table)
+    else:
+        Handler.registration_table = None
     server = ApplicationServer((settings.host, settings.port), Handler)
     LOGGER.info(
         "server_started",

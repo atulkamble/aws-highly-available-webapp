@@ -12,13 +12,14 @@ WEBSITE_URL="$(terraform -chdir="$TERRAFORM_DIR" output -raw website_url)"
 
 printf 'Testing application URL: %s\n' "$WEBSITE_URL"
 HOMEPAGE="$(curl -fsS "$WEBSITE_URL")"
-printf '%s' "$HOMEPAGE" | grep -q 'Built to stay'
-printf '%s' "$HOMEPAGE" | grep -q 'Total page visits'
-printf '%s' "$HOMEPAGE" | grep -Eq 'id="total-visits"[^>]*>[0-9][0-9,]*</div>' || {
+printf '%s' "$HOMEPAGE" | grep -q 'Mobile Launch Event'
+printf '%s' "$HOMEPAGE" | grep -q 'Register for the launch'
+printf '%s' "$HOMEPAGE" | grep -q 'name="pincode"'
+printf '%s' "$HOMEPAGE" | grep -Eq 'id="total-visits">[0-9][0-9,]*</strong>' || {
   printf 'Error: visitor counter did not return a numeric total.\n' >&2
   exit 1
 }
-printf 'Dashboard page: OK\n'
+printf 'Event page: OK\n'
 
 printf 'Checking ALB readiness endpoint...\n'
 curl -fsS "$WEBSITE_URL/health/ready"
@@ -30,4 +31,4 @@ for field in status instance_id availability_zone region app_version uptime_seco
     exit 1
   }
 done
-printf 'Dashboard API: OK\n'
+printf 'Application status API: OK\n'

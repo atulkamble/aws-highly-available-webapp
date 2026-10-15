@@ -1,27 +1,29 @@
-# AWS Highly Available Service Dashboard
+# Flipkart Mobile Launch Event
 
 ## Objectives
 - Deploy a web application across two AWS Availability Zones.
 - Distribute HTTP requests and replace unhealthy application instances.
-- Demonstrate horizontal scaling, health checks, instance telemetry, and a persistent visit counter.
+- Host a midnight mobile-sale event page with customer registration.
+- Demonstrate horizontal scaling, health checks, instance telemetry, and persistent event registrations.
 - Provision and manage the infrastructure as code with Terraform.
 
 **Remember:** This is an educational high-availability demonstration, not a production security baseline.
 
 ## Application
 
-The Python web app serves a live dashboard. It displays the responding EC2 instance, Availability Zone, AWS Region, uptime, app build version, and that instance's page-request count. A global visit total is stored in DynamoDB and incremented through Lambda.
+The Python web app serves a Flipkart Mobile Launch Event page with a countdown to the next local midnight and a registration form for customer name, address, and a six-digit Indian PIN code. Registration details are stored in a dedicated DynamoDB table. The page also displays a global visit total stored in DynamoDB and incremented through Lambda, and compact application/instance status.
 
 | Route | Purpose |
 |---|---|
-| `/` | Serves the dashboard and increments the global visit total once per page request. |
+| `/` | Serves the event page and increments the global visit total once per page request. |
+| `POST /api/register` | Validates name, address, and PIN code, then stores the registration in DynamoDB. |
 | `/api/status` | Returns instance telemetry; dashboard polling does not change visit totals. |
 | `/health` | Lightweight liveness endpoint. |
 | `/health/ready` | Readiness endpoint used by the ALB target health check. |
 
-Per-instance request counts reset when an instance is replaced. The global DynamoDB total persists until the stack is destroyed. ALB routing does not guarantee that consecutive requests reach different instances.
+Registrations and the global visit total persist in their respective DynamoDB tables until the stack is destroyed. Registration data contains personal information; protect access to AWS and Terraform state, and destroy the stack when this event data is no longer needed. The application does not currently enforce an event-specific retention period. Per-instance request counts reset when an instance is replaced. ALB routing does not guarantee that consecutive requests reach different instances.
 
-**Remember:** The dashboard reports application and instance observations; use AWS console/service tools to inspect control-plane health.
+**Remember:** The event page reports application and instance observations; use AWS console/service tools to inspect control-plane health.
 
 ## Architecture
 
@@ -32,6 +34,7 @@ flowchart LR
     ASG --> Web[Python dashboard on EC2]
     Web --> Counter[Counter Lambda]
     Counter --> Visits[(DynamoDB visit total)]
+    Web --> Registrations[(DynamoDB event registrations)]
     Artifact[S3 app artifact] --> EC2[EC2 bootstrap]
     Web -. status telemetry .-> Browser[Dashboard]
 
@@ -79,13 +82,15 @@ flowchart TB
     EC2A --> Lambda[Counter Lambda]
     EC2B --> Lambda
     Lambda --> DDB[(DynamoDB)]
+    EC2A --> Registrations[(DynamoDB event registrations)]
+    EC2B --> Registrations
     S3[Private encrypted S3 artifact] -. bootstrap download .-> EC2A
     S3 -. bootstrap download .-> EC2B
 ```
 
-The two subnet and instance groups represent the multi-AZ layout. The ALB security group allows inbound HTTP from the internet; the instance security group allows application traffic only from the ALB. EC2 uses its IAM instance profile for S3, Lambda, and Systems Manager access.
+The two subnet and instance groups represent the multi-AZ layout. The ALB security group allows inbound HTTP from the internet; the instance security group allows application traffic only from the ALB. EC2 uses its IAM instance profile for S3, Lambda, DynamoDB registrations, and Systems Manager access.
 
-### Request and counter flow
+### Page, counter, and registration flow
 
 ```mermaid
 sequenceDiagram
@@ -94,6 +99,7 @@ sequenceDiagram
     participant App as Python app on EC2
     participant Lambda as Counter Lambda
     participant DB as DynamoDB
+    participant RegDB as Registration DynamoDB table
 
     User->>ALB: GET /
     ALB->>App: Forward to healthy instance
@@ -103,6 +109,11 @@ sequenceDiagram
     Lambda-->>App: Visit total
     App-->>ALB: Dashboard HTML
     ALB-->>User: Dashboard response
+    User->>ALB: POST /api/register with name, address, and PIN code
+    ALB->>App: Forward registration
+    App->>RegDB: Store validated registration
+    RegDB-->>App: Registration saved
+    App-->>User: Registration confirmation
     loop Every 5 seconds
         User->>ALB: GET /api/status
         ALB->>App: Forward to an instance
@@ -110,7 +121,7 @@ sequenceDiagram
     end
 ```
 
-If the counter call fails, the app still serves the dashboard with an unavailable counter message. The per-instance request count and uptime are in-memory telemetry; only the visit total is shared and persistent.
+If the counter call fails, the app still serves the event page with an unavailable counter message. Registration submission reports a failure if DynamoDB cannot save the details. The per-instance request count and uptime are in-memory telemetry; registrations and the visit total are shared and persistent.
 
 ### Implementation workflow
 
@@ -138,8 +149,8 @@ flowchart LR
 | Counter function | AWS Lambda, Python 3.12 runtime. |
 | Networking | One VPC with two public subnets in separate Availability Zones. |
 | Scaling and routing | Application Load Balancer and EC2 Auto Scaling; CPU target defaults to 60%. |
-| State and artifact storage | DynamoDB on-demand counter table; private S3 app artifact bucket. |
-| Instance access | IAM instance profile with scoped S3/Lambda permissions and Systems Manager managed-instance permissions. |
+| State and artifact storage | DynamoDB on-demand counter and registration tables; private S3 app artifact bucket. |
+| Instance access | IAM instance profile with scoped S3/Lambda/DynamoDB permissions and Systems Manager managed-instance permissions. |
 | Deployment | Bash scripts invoke Terraform; default Region `us-east-1`, stack name `aws-capstone`. |
 
 **Remember:** AWS credentials must be configured for Terraform's AWS provider. Review the plan, Region, and stack name before applying.
@@ -149,12 +160,12 @@ flowchart LR
 | AWS service | How it is used | Significance |
 |---|---|---|
 | Amazon VPC | Provides the application network, two public subnets, Internet Gateway, routes, and security groups. | Isolates and controls network connectivity for the deployment. |
-| Amazon EC2 | Runs the Python dashboard on Amazon Linux 2023. | Provides the application compute capacity. |
+| Amazon EC2 | Runs the Python event page on Amazon Linux 2023. | Provides the application compute capacity. |
 | Elastic Load Balancing (ALB) | Accepts HTTP and forwards requests to healthy targets. | Distributes traffic and removes unhealthy targets from routing. |
 | EC2 Auto Scaling | Maintains two to four instances, replaces unhealthy instances, and tracks average CPU. | Supports availability, recovery, and demand-based capacity. |
 | Amazon S3 | Holds the zipped application artifact with public access blocked and encryption enabled. | Separates application packaging from instance bootstrapping. |
 | AWS Lambda | Atomically increments the global visit count by calling DynamoDB. | Keeps counter updates independent of individual web instances. |
-| Amazon DynamoDB | Stores the persistent visit total using on-demand billing. | Retains a shared counter across instance replacements. |
+| Amazon DynamoDB | Stores the shared visit total and customer event registrations with on-demand billing. | Retains data across instance replacements. Registration writes are limited to the registration table by the EC2 role. |
 | AWS Identity and Access Management (IAM) | Grants EC2 and Lambda narrowly scoped service permissions. | Enables service-to-service access without application-stored AWS keys. |
 | AWS Systems Manager | EC2 instance role includes `AmazonSSMManagedInstanceCore`. | Supports managed-instance access without requiring inbound SSH access. |
 
@@ -198,7 +209,7 @@ aws-highly-available-webapp/
    ./deploy.sh
    ```
 
-   The deploy script initializes Terraform, applies the configuration, and prints the dashboard URL.
+   The deploy script initializes Terraform, applies the configuration, and prints the event page URL.
 8. **Verify the running stack.** Open the `website_url` output, run `./scripts/test.sh`, and observe `/api/status`. For a recovery demonstration, terminate one Auto Scaling group instance in the EC2 console and observe target health and replacement in the Auto Scaling and Target Groups consoles.
 9. **Clean up when finished.** Run `./cleanup.sh` only when you intend to destroy resources managed by the current state. Preserve the state file until Terraform confirms destroy succeeded.
 
@@ -257,10 +268,10 @@ The cleanup script runs `terraform destroy -auto-approve`. Review the selected A
 ## Points to remember
 
 - Two Availability Zones improve resilience, but the current application endpoint is public HTTP.
-- The global visit count is DynamoDB-backed; instance telemetry is local to each EC2 instance.
+- The global visit count and event registrations are DynamoDB-backed; instance telemetry is local to each EC2 instance.
 - ALB health checks use `/health/ready`; the dashboard is not an AWS control-plane health monitor.
 - Terraform state is essential for safe updates and cleanup; protect it and preserve it through destroy.
-- Cleanup permanently destroys the stack resources and stored counter.
+- Cleanup permanently destroys the stack resources, stored counter, and event registrations.
 
 ## References
 

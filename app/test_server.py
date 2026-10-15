@@ -30,6 +30,17 @@ class FakeCounterClient:
         return {"Payload": io.BytesIO(json.dumps({"count": self.count}).encode())}
 
 
+class FakeRegistrationTable:
+    def __init__(self):
+        self.items = []
+        self.error = None
+
+    def put_item(self, **kwargs):
+        if self.error:
+            raise self.error
+        self.items.append(kwargs["Item"])
+
+
 class HandlerTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -39,12 +50,21 @@ class HandlerTests(unittest.TestCase):
             region="us-east-1",
         )
         cls.state = RuntimeState(
-            Settings("127.0.0.1", 0, "us-east-1", "test-build", "test-counter"),
+            Settings(
+                "127.0.0.1",
+                0,
+                "us-east-1",
+                "test-build",
+                "test-counter",
+                "test-registrations",
+            ),
             cls.metadata,
         )
         cls.counter = FakeCounterClient()
+        cls.registration_table = FakeRegistrationTable()
         Handler.runtime_state = cls.state
         Handler.counter_client = cls.counter
+        Handler.registration_table = cls.registration_table
         cls.server = ApplicationServer(("127.0.0.1", 0), Handler)
         cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
         cls.thread.start()
@@ -57,6 +77,7 @@ class HandlerTests(unittest.TestCase):
         cls.thread.join(timeout=2)
         Handler.runtime_state = None
         Handler.counter_client = None
+        Handler.registration_table = None
 
     def setUp(self):
         with self.state.lock:
@@ -64,10 +85,12 @@ class HandlerTests(unittest.TestCase):
         self.counter.calls = 0
         self.counter.count = 0
         self.counter.error = None
+        self.registration_table.items.clear()
+        self.registration_table.error = None
 
-    def request(self, path, method="GET"):
+    def request(self, path, method="GET", body=None, headers=None):
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=2)
-        connection.request(method, path)
+        connection.request(method, path, body=body, headers=headers or {})
         response = connection.getresponse()
         result = response.status, dict(response.getheaders()), response.read()
         connection.close()
@@ -79,21 +102,20 @@ class HandlerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(self.state.snapshot()["page_requests"], 1)
         self.assertEqual(self.counter.calls, 1)
-        self.assertIn(b"Serving instance", body)
-        self.assertIn(b"Total page visits", body)
-        self.assertIn(b'class="background-video"', body)
-        self.assertIn(b"https://interactive-examples.mdn.mozilla.net/media/cc0-videos/flower.mp4", body)
-        self.assertIn(b">1</div>", body)
+        self.assertIn(b"Flipkart | Mobile Launch Event", body)
+        self.assertIn(b"Mobile Launch Event", body)
+        self.assertIn(b"Register for the launch", body)
+        self.assertIn(b'name="name"', body)
+        self.assertIn(b'name="address"', body)
+        self.assertIn(b'name="pincode"', body)
+        self.assertIn(b'id="total-visits">1</strong>', body)
         self.assertIn(b"/dashboard.js", body)
         self.assertEqual(headers["Content-Type"], "text/html; charset=utf-8")
         self.assertEqual(headers["X-Content-Type-Options"], "nosniff")
         self.assertEqual(headers["X-Frame-Options"], "DENY")
         self.assertEqual(headers["Cache-Control"], "no-store")
         self.assertIn("script-src 'self'", headers["Content-Security-Policy"])
-        self.assertIn(
-            "media-src https://interactive-examples.mdn.mozilla.net",
-            headers["Content-Security-Policy"],
-        )
+        self.assertIn("form-action 'self'", headers["Content-Security-Policy"])
         self.assertTrue(headers["X-Request-ID"])
 
     def test_status_endpoint_returns_instance_telemetry(self):
@@ -120,6 +142,73 @@ class HandlerTests(unittest.TestCase):
         self.assertEqual(js_status, 200)
         self.assertEqual(js_headers["Content-Type"], "text/javascript; charset=utf-8")
         self.assertIn(b"/api/status", js_body)
+        self.assertIn(b"/api/register", js_body)
+        self.assertIn(b"updateCountdown", js_body)
+
+    def test_registration_is_saved_and_returns_confirmation(self):
+        registration = {
+            "name": "Asha Patel",
+            "address": "42 Example Road, Pune",
+            "pincode": "411001",
+        }
+
+        status, headers, body = self.request(
+            "/api/register",
+            method="POST",
+            body=json.dumps(registration),
+            headers={"Content-Type": "application/json"},
+        )
+
+        self.assertEqual(status, 201)
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+        response = json.loads(body)
+        self.assertEqual(response["status"], "registered")
+        self.assertEqual(len(self.registration_table.items), 1)
+        saved = self.registration_table.items[0]
+        self.assertEqual({key: saved[key] for key in registration}, registration)
+        self.assertTrue(saved["registration_id"])
+        self.assertTrue(saved["registered_at"])
+
+    def test_registration_rejects_invalid_pin_without_saving(self):
+        registration = {"name": "Asha", "address": "Pune", "pincode": "41101"}
+
+        status, _, body = self.request(
+            "/api/register",
+            method="POST",
+            body=json.dumps(registration),
+            headers={"Content-Type": "application/json"},
+        )
+
+        self.assertEqual(status, 400)
+        self.assertIn(b"6-digit PIN code", body)
+        self.assertEqual(self.registration_table.items, [])
+
+    def test_registration_rejects_non_json_content_type(self):
+        status, _, body = self.request(
+            "/api/register",
+            method="POST",
+            body="{}",
+            headers={"Content-Type": "text/plain"},
+        )
+
+        self.assertEqual(status, 415)
+        self.assertIn(b"application/json", body)
+        self.assertEqual(self.registration_table.items, [])
+
+    def test_registration_storage_failure_returns_service_unavailable(self):
+        self.registration_table.error = RuntimeError("simulated database failure")
+        registration = {"name": "Asha", "address": "Pune", "pincode": "411001"}
+
+        status, _, body = self.request(
+            "/api/register",
+            method="POST",
+            body=json.dumps(registration),
+            headers={"Content-Type": "application/json"},
+        )
+
+        self.assertEqual(status, 503)
+        self.assertIn(b"could not be saved", body)
+        self.assertEqual(self.registration_table.items, [])
 
     def test_query_string_homepage_counts_once(self):
         status, _, _ = self.request("/?source=test")
@@ -143,7 +232,7 @@ class HandlerTests(unittest.TestCase):
 
         self.assertEqual(status, 200)
         self.assertIn("Counter temporarily unavailable".encode(), body)
-        self.assertIn(">—</div>".encode(), body)
+        self.assertIn('id="total-visits">—</strong>'.encode(), body)
         self.assertEqual(self.counter.calls, 1)
 
     def test_health_endpoints_do_not_increment_page_count(self):
@@ -181,6 +270,7 @@ class SettingsTests(unittest.TestCase):
                 "AWS_REGION": "eu-west-1",
                 "APP_VERSION": "test",
                 "COUNTER_FUNCTION": "visit-counter",
+                "REGISTRATION_TABLE": "event-registrations",
             },
             clear=True,
         ):
@@ -191,6 +281,7 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual(settings.region, "eu-west-1")
         self.assertEqual(settings.app_version, "test")
         self.assertEqual(settings.counter_function, "visit-counter")
+        self.assertEqual(settings.registration_table, "event-registrations")
 
     def test_rejects_invalid_port(self):
         with patch.dict(os.environ, {"PORT": "not-a-port"}, clear=True):

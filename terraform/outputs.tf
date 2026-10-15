@@ -18,6 +18,11 @@ output "dynamodb_table_name" {
   value       = aws_dynamodb_table.counter.name
 }
 
+output "registration_table_name" {
+  description = "Name of the DynamoDB table containing event registration details."
+  value       = aws_dynamodb_table.registrations.name
+}
+
 output "lambda_function_name" {
   description = "Name of the visitor counter Lambda function."
   value       = aws_lambda_function.counter.function_name

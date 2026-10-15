@@ -199,6 +199,21 @@ resource "aws_dynamodb_table" "counter" {
   }
 }
 
+resource "aws_dynamodb_table" "registrations" {
+  name         = "${var.project_name}-registrations"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "registration_id"
+
+  attribute {
+    name = "registration_id"
+    type = "S"
+  }
+
+  tags = {
+    Name = "${var.project_name}-registrations"
+  }
+}
+
 resource "aws_iam_role" "lambda" {
   name = "${var.project_name}-lambda"
 
@@ -288,6 +303,20 @@ resource "aws_iam_role_policy" "web_invoke_counter" {
   })
 }
 
+resource "aws_iam_role_policy" "web_store_registrations" {
+  name = "${var.project_name}-store-registrations"
+  role = aws_iam_role.web.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["dynamodb:PutItem"]
+      Resource = aws_dynamodb_table.registrations.arn
+    }]
+  })
+}
+
 resource "aws_iam_role_policy" "web_read_application_artifact" {
   name = "${var.project_name}-read-app-artifact"
   role = aws_iam_role.web.id
@@ -318,11 +347,12 @@ resource "aws_launch_template" "web" {
 
   vpc_security_group_ids = [aws_security_group.web.id]
   user_data = base64encode(templatefile("${path.module}/user_data.sh.tftpl", {
-    app_bucket       = aws_s3_bucket.application_artifact.id
-    app_object_key   = aws_s3_object.application_artifact.key
-    app_bundle_hash  = data.archive_file.webapp.output_base64sha256
-    aws_region       = var.aws_region
-    counter_function = aws_lambda_function.counter.function_name
+    app_bucket         = aws_s3_bucket.application_artifact.id
+    app_object_key     = aws_s3_object.application_artifact.key
+    app_bundle_hash    = data.archive_file.webapp.output_base64sha256
+    aws_region         = var.aws_region
+    counter_function   = aws_lambda_function.counter.function_name
+    registration_table = aws_dynamodb_table.registrations.name
   }))
 
   update_default_version = true
@@ -426,6 +456,7 @@ resource "aws_autoscaling_group" "web" {
     aws_route_table_association.public,
     aws_iam_role_policy_attachment.web_ssm,
     aws_iam_role_policy.web_invoke_counter,
+    aws_iam_role_policy.web_store_registrations,
     aws_iam_role_policy.web_read_application_artifact,
     aws_s3_object.application_artifact,
   ]
