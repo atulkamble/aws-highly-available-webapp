@@ -240,6 +240,7 @@ resource "aws_launch_template" "web" {
   vpc_security_group_ids = [aws_security_group.web.id]
   user_data = base64encode(templatefile("${path.module}/user_data.sh.tftpl", {
     app_source       = file("${path.module}/../app/server.py")
+    app_requirements = file("${path.module}/../app/requirements.txt")
     aws_region       = var.aws_region
     counter_function = aws_lambda_function.counter.function_name
   }))

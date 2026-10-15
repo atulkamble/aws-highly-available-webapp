@@ -1,8 +1,87 @@
-import os, json, html, boto3
+import html
+import json
+import logging
+import os
+import signal
+import sys
+import time
+import uuid
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 
-lambda_client = boto3.client('lambda', region_name=os.environ.get('AWS_REGION','us-east-1'))
+LOGGER = logging.getLogger("webapp")
+
+
+@dataclass(frozen=True)
+class Settings:
+    host: str
+    port: int
+    aws_region: str
+    counter_function: str
+
+    @classmethod
+    def from_environment(cls):
+        raw_port = os.environ.get("PORT", "8080")
+        try:
+            port = int(raw_port)
+        except ValueError as exc:
+            raise ValueError("PORT must be an integer between 1 and 65535") from exc
+        if not 1 <= port <= 65535:
+            raise ValueError("PORT must be an integer between 1 and 65535")
+
+        counter_function = os.environ.get("COUNTER_FUNCTION", "").strip()
+        if not counter_function:
+            raise ValueError("COUNTER_FUNCTION must be set to the visitor counter Lambda name")
+
+        return cls(
+            host=os.environ.get("HOST", "0.0.0.0"),
+            port=port,
+            aws_region=os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1",
+            counter_function=counter_function,
+        )
+
+
+class JsonLogFormatter(logging.Formatter):
+    def format(self, record):
+        entry = {
+            "timestamp": time.strftime(
+                "%Y-%m-%dT%H:%M:%S%z", time.gmtime(record.created)
+            ),
+            "level": record.levelname,
+            "logger": record.name,
+            "message": record.getMessage(),
+        }
+        event_data = getattr(record, "event_data", None)
+        if event_data:
+            entry.update(event_data)
+        if record.exc_info:
+            entry["exception"] = self.formatException(record.exc_info)
+        return json.dumps(entry, ensure_ascii=True, default=str)
+
+
+def configure_logging():
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(JsonLogFormatter())
+    logging.basicConfig(level=logging.INFO, handlers=[handler], force=True)
+
+
+def create_counter_client(aws_region):
+    import boto3
+    from botocore.config import Config
+
+    return boto3.client(
+        "lambda",
+        region_name=aws_region,
+        config=Config(
+            connect_timeout=2,
+            read_timeout=15,
+            # A timed-out increment may have reached Lambda; retrying could count it twice.
+            retries={"total_max_attempts": 1},
+            max_pool_connections=50,
+            user_agent_extra="aws-ha-webapp/1.0",
+        ),
+    )
 
 PAGE_TEMPLATE = """<!doctype html>
 <html lang="en">
@@ -159,7 +238,7 @@ PAGE_TEMPLATE = """<!doctype html>
         </span>
         <span class="brand-copy"><strong>cloudnautic</strong><span>AWS CLOUD PROJECT</span></span>
       </a>
-      <span class="top-status"><span class="status-dot"></span> System operational</span>
+      <span class="top-status"><span class="status-dot"></span> Application online</span>
     </header>
 
     <main>
@@ -172,7 +251,7 @@ PAGE_TEMPLATE = """<!doctype html>
       <section class="metric-card" aria-labelledby="visitor-heading">
         <div class="metric-label" id="visitor-heading">Total page visits</div>
         <div class="metric-value" aria-live="polite">{{visitor_count}}</div>
-        <div class="metric-note">Tracked in real time with <strong>Lambda + DynamoDB</strong></div>
+        <div class="metric-note">{{counter_message}}</div>
         <a class="refresh-link" href="/" aria-label="Refresh page and record another visit">
           <svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M16.5 8A6.7 6.7 0 0 0 5 5.4L3.5 7M3.5 7V3.8M3.5 7h3.2M3.5 12A6.7 6.7 0 0 0 15 14.6l1.5-1.6m0 0v3.2m0-3.2h-3.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
           Refresh to count your visit
@@ -208,13 +287,81 @@ PAGE_TEMPLATE = """<!doctype html>
 
 
 class Handler(BaseHTTPRequestHandler):
+    server_version = "AWS-HA-WebApp"
+    sys_version = ""
+    counter_client = None
+    settings = None
+
+    def handle_one_request(self):
+        self.request_id = uuid.uuid4().hex
+        self.response_status = 0
+        self.request_started_at = time.perf_counter()
+        super().handle_one_request()
+
+    def send_response(self, code, message=None):
+        self.response_status = code
+        super().send_response(code, message)
+
+    def end_headers(self):
+        self.send_header("X-Request-ID", self.request_id)
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "DENY")
+        self.send_header("Referrer-Policy", "no-referrer")
+        self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'none'; style-src 'unsafe-inline'; img-src data:; "
+            "base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+        )
+        self.send_header("Cache-Control", "no-store")
+        super().end_headers()
+
+    def log_request(self, code="-", size="-"):
+        LOGGER.info(
+            "http_request",
+            extra={
+                "event_data": {
+                    "request_id": self.request_id,
+                    "method": self.command,
+                    "path": urlparse(self.path).path,
+                    "status": code,
+                    "response_bytes": size,
+                    "duration_ms": round(
+                        (time.perf_counter() - self.request_started_at) * 1000, 2
+                    ),
+                }
+            },
+        )
+
+    def log_message(self, format_string, *args):
+        LOGGER.warning(
+            "http_server_message",
+            extra={
+                "event_data": {
+                    "request_id": self.request_id,
+                    "message_template": format_string,
+                    "argument_count": len(args),
+                }
+            },
+        )
+
+    def _send_json(self, status, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
     def do_GET(self):
         request_path = urlparse(self.path).path
         if request_path == '/health':
-            self.send_response(200)
-            self.send_header('Content-Length', '2')
-            self.end_headers()
-            self.wfile.write(b'ok')
+            self._send_json(200, {"status": "ok"})
+            return
+        if request_path == '/health/ready':
+            ready = self.counter_client is not None and self.settings is not None
+            status = 200 if ready else 503
+            self._send_json(status, {"status": "ready" if ready else "not_ready"})
             return
         if request_path == '/favicon.ico':
             self.send_response(204)
@@ -225,20 +372,102 @@ class Handler(BaseHTTPRequestHandler):
             self.send_error(404)
             return
 
-        count = 'unavailable'
+        count = None
         try:
-            response = lambda_client.invoke(FunctionName=os.environ['COUNTER_FUNCTION'], InvocationType='RequestResponse', Payload=b'{}')
-            result = json.loads(response['Payload'].read())
-            count = result.get('count', 'unavailable')
-        except Exception as e:
-            print('Visitor counter failed:', repr(e), flush=True)
-        body = PAGE_TEMPLATE.replace('{{visitor_count}}', html.escape(str(count))).encode()
+            if self.counter_client is None or self.settings is None:
+                raise RuntimeError("Counter client has not been initialized")
+            response = self.counter_client.invoke(
+                FunctionName=self.settings.counter_function,
+                InvocationType="RequestResponse",
+                Payload=b"{}",
+            )
+            if response.get("FunctionError"):
+                raise RuntimeError("Counter Lambda returned a function error")
+            result = json.loads(response["Payload"].read())
+            count = result.get("count")
+            if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+                raise ValueError("Counter Lambda returned an invalid count")
+        except Exception as exc:
+            LOGGER.warning(
+                "visitor_counter_unavailable",
+                extra={
+                    "event_data": {
+                        "request_id": self.request_id,
+                        "error_type": type(exc).__name__,
+                    }
+                },
+            )
+
+        count_text = f"{count:,}" if count is not None else "—"
+        counter_message = (
+            "Tracked in real time with <strong>Lambda + DynamoDB</strong>"
+            if count is not None
+            else "Counter temporarily unavailable. Please try again shortly."
+        )
+        body = PAGE_TEMPLATE.replace(
+            "{{visitor_count}}", html.escape(count_text)
+        ).replace("{{counter_message}}", counter_message).encode("utf-8")
         self.send_response(200)
         self.send_header('Content-Type', 'text/html; charset=utf-8')
         self.send_header('Content-Length', str(len(body)))
-        self.send_header('Cache-Control', 'no-store')
         self.end_headers()
         self.wfile.write(body)
 
+    def do_HEAD(self):
+        self.send_response(405)
+        self.send_header("Allow", "GET")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
 
-ThreadingHTTPServer(('0.0.0.0', 8080), Handler).serve_forever()
+
+class ApplicationServer(ThreadingHTTPServer):
+    daemon_threads = False
+    request_queue_size = 128
+
+
+def stop_on_termination(_signum, _frame):
+    LOGGER.info(
+        "termination_signal_received",
+        extra={
+            "event_data": {
+                "signal": _signum,
+                "handler": _frame.f_code.co_name if _frame is not None else None,
+            }
+        },
+    )
+    raise KeyboardInterrupt
+
+
+def main():
+    configure_logging()
+    try:
+        settings = Settings.from_environment()
+    except ValueError as exc:
+        LOGGER.critical("invalid_configuration", extra={"event_data": {"error": str(exc)}})
+        return 2
+
+    Handler.settings = settings
+    Handler.counter_client = create_counter_client(settings.aws_region)
+    server = ApplicationServer((settings.host, settings.port), Handler)
+    LOGGER.info(
+        "server_started",
+        extra={
+            "event_data": {
+                "host": settings.host,
+                "port": settings.port,
+                "aws_region": settings.aws_region,
+            }
+        },
+    )
+    try:
+        signal.signal(signal.SIGTERM, stop_on_termination)
+        server.serve_forever()
+    except KeyboardInterrupt:
+        LOGGER.info("server_shutdown_requested")
+    finally:
+        server.server_close()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

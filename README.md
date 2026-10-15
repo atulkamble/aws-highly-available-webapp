@@ -28,7 +28,9 @@ The stack creates a VPC with two public subnets, an Internet Gateway, route tabl
 ```text
 aws-highly-available-webapp/
 ├── app/
-│   └── server.py
+│   ├── server.py
+│   ├── requirements.txt
+│   └── test_server.py
 ├── terraform/
 │   ├── lambda/
 │   │   └── index.py
@@ -106,6 +108,25 @@ The test reads `website_url` and `dynamodb_table_name` from the active Terraform
 ```bash
 terraform -chdir=terraform output
 ```
+
+## Application patterns for students
+
+The web app is a small, dependency-light Python HTTP service intended to demonstrate several production patterns:
+
+- **Configuration and startup:** deployment settings come from environment variables; invalid required settings stop startup with a clear error. Importing the module does not start the server.
+- **Health and routing:** `/health` is a lightweight load-balancer liveness check; `/health/ready` reports whether application configuration and the Lambda client are initialized. Readiness does not call Lambda, because doing so would increment the counter. Only `GET /` records a page view; favicon and unknown paths do not.
+- **Resilience:** a counter failure is logged and shown as temporarily unavailable while the rest of the page stays available. The Lambda SDK uses bounded timeouts and does not retry an increment whose result may be ambiguous.
+- **Security and operations:** the app HTML-escapes the displayed value, sets browser security headers, adds a per-request ID, and writes structured JSON logs to stdout. On an EC2 instance, inspect service logs with `sudo journalctl -u capstone`.
+- **Graceful concurrency:** a threaded HTTP server handles concurrent requests and waits for in-flight requests during shutdown.
+- **Dependency management:** runtime Python dependencies are declared in `app/requirements.txt` and installed in an isolated virtual environment during EC2 bootstrap.
+
+Run the focused tests locally with Python's standard library; AWS credentials and `boto3` are not required for these tests:
+
+```bash
+python3 -m unittest discover -s app -p 'test_*.py' -v
+```
+
+This is a teaching example, not a claim that the whole deployment is production-ready. For example, the infrastructure still uses public HTTP and public subnets, does not ship application logs to CloudWatch, and does not deduplicate browser retries. A refresh or a repeated request to `/` is a new page view; an ambiguous network failure followed by a user retry can also result in an extra increment.
 
 ## Clean up
 

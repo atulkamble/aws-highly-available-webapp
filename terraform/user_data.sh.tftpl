@@ -2,11 +2,15 @@
 set -euxo pipefail
 
 dnf install -y python3 python3-pip
-python3 -m pip install --ignore-installed --no-cache-dir boto3
 mkdir -p /opt/capstone
+cat > /opt/capstone/requirements.txt <<'REQ'
+${app_requirements}
+REQ
 cat > /opt/capstone/server.py <<'PY'
 ${app_source}
 PY
+python3 -m venv /opt/capstone/.venv
+/opt/capstone/.venv/bin/pip install --disable-pip-version-check --no-cache-dir -r /opt/capstone/requirements.txt
 
 cat > /etc/systemd/system/capstone.service <<'SERVICE'
 [Unit]
@@ -17,9 +21,10 @@ Wants=network-online.target
 [Service]
 Environment="AWS_REGION=${aws_region}"
 Environment="COUNTER_FUNCTION=${counter_function}"
-ExecStart=/usr/bin/python3 /opt/capstone/server.py
+ExecStart=/opt/capstone/.venv/bin/python /opt/capstone/server.py
 Restart=always
 RestartSec=5
+TimeoutStopSec=30
 
 [Install]
 WantedBy=multi-user.target
