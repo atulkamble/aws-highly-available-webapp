@@ -29,7 +29,7 @@ The stack creates a VPC with two public subnets, an Internet Gateway, route tabl
 aws-highly-available-webapp/
 ├── app/
 │   └── server.py
-├── infra/
+├── terraform/
 │   ├── lambda/
 │   │   └── index.py
 │   ├── main.tf
@@ -50,7 +50,9 @@ aws-highly-available-webapp/
 - AWS permissions to create VPC/networking, EC2/Auto Scaling, ELB, Lambda, DynamoDB, IAM, and SSM-related resources
 - `curl` to run the application smoke test
 
-Terraform uses the local state file at `infra/terraform.tfstate` by default. Keep state private and back it up; it can contain infrastructure metadata. For team or production use, configure a remote, encrypted Terraform backend with locking before deployment.
+Terraform uses the local state file at `terraform/terraform.tfstate` by default. Keep state private and back it up; it can contain infrastructure metadata. For team or production use, configure a remote, encrypted Terraform backend with locking before deployment.
+
+If you previously ran Terraform from the old `infra/` directory, move its `terraform.tfstate` (and `terraform.tfstate.backup`, if present) into `terraform/` before running the deployment script. Do not apply from the new directory until the existing state has been migrated, or Terraform may try to create a second stack.
 
 ## Configure
 
@@ -61,26 +63,28 @@ export AWS_REGION=us-east-1
 export STACK_NAME=aws-capstone
 ```
 
-The corresponding Terraform inputs are in [infra/variables.tf](./infra/variables.tf). The stack creates public subnets and allows public HTTP traffic to the load balancer; it is intended as a learning example, not a production-ready security design.
+All infrastructure code and deployment state live in the top-level [terraform/](./terraform/) folder. The corresponding Terraform inputs are in [variables.tf](./terraform/variables.tf). The stack creates public subnets and allows public HTTP traffic to the load balancer; it is intended as a learning example, not a production-ready security design.
 
 ## Deploy
 
-The helper script initializes Terraform, creates or updates the infrastructure, and prints its outputs:
+Deploy the complete project with one command from the repository root:
 
 ```bash
-./scripts/deploy.sh
+./deploy.sh
 ```
 
-Or run Terraform directly from the repository root:
+This initializes Terraform, provisions the AWS infrastructure, launches the application on the EC2 Auto Scaling group, and prints the outputs including the website URL. It uses `AWS_REGION` and `STACK_NAME` when set; otherwise it deploys to `us-east-1` with the name `aws-capstone`. AWS credentials must already be configured.
+
+For manual Terraform operations, all commands use the `terraform/` project directory:
 
 ```bash
-terraform -chdir=infra init
-terraform -chdir=infra fmt -check
-terraform -chdir=infra validate
-terraform -chdir=infra plan \
+terraform -chdir=terraform init
+terraform -chdir=terraform fmt -check
+terraform -chdir=terraform validate
+terraform -chdir=terraform plan \
   -var="aws_region=${AWS_REGION:-us-east-1}" \
   -var="project_name=${STACK_NAME:-aws-capstone}"
-terraform -chdir=infra apply \
+terraform -chdir=terraform apply \
   -var="aws_region=${AWS_REGION:-us-east-1}" \
   -var="project_name=${STACK_NAME:-aws-capstone}"
 ```
@@ -100,7 +104,7 @@ Run the smoke test to request the website and read the visitor item from DynamoD
 The test reads `website_url` and `dynamodb_table_name` from the active Terraform state. You can inspect all outputs directly:
 
 ```bash
-terraform -chdir=infra output
+terraform -chdir=terraform output
 ```
 
 ## Clean up
@@ -114,7 +118,7 @@ Destroy the resources managed by the current Terraform state:
 Or run Terraform directly:
 
 ```bash
-terraform -chdir=infra destroy \
+terraform -chdir=terraform destroy \
   -var="aws_region=${AWS_REGION:-us-east-1}" \
   -var="project_name=${STACK_NAME:-aws-capstone}"
 ```
