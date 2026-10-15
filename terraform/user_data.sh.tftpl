@@ -2,15 +2,28 @@
 set -euxo pipefail
 
 dnf install -y python3 python3-pip
-mkdir -p /opt/capstone
-cat > /opt/capstone/requirements.txt <<'REQ'
-${app_requirements}
-REQ
-cat > /opt/capstone/server.py <<'PY'
-${app_source}
-PY
+mkdir -p /opt/capstone/app
 python3 -m venv /opt/capstone/.venv
-/opt/capstone/.venv/bin/pip install --disable-pip-version-check --no-cache-dir -r /opt/capstone/requirements.txt
+/opt/capstone/.venv/bin/pip install --disable-pip-version-check --no-cache-dir boto3
+
+AWS_REGION="${aws_region}" /opt/capstone/.venv/bin/python - <<'PY'
+import boto3
+import os
+import zipfile
+
+archive_path = "/opt/capstone/webapp.zip"
+boto3.client("s3", region_name=os.environ["AWS_REGION"]).download_file(
+    "${app_bucket}", "${app_object_key}", archive_path
+)
+with zipfile.ZipFile(archive_path) as archive:
+    archive.extractall("/opt/capstone/app")
+PY
+
+/opt/capstone/.venv/bin/pip install \
+  --disable-pip-version-check \
+  --no-cache-dir \
+  -r /opt/capstone/app/requirements.txt
+printf '%s\n' "${app_bundle_hash}" > /opt/capstone/.bundle-sha256
 
 cat > /etc/systemd/system/capstone.service <<'SERVICE'
 [Unit]
@@ -20,8 +33,9 @@ Wants=network-online.target
 
 [Service]
 Environment="AWS_REGION=${aws_region}"
+Environment="APP_VERSION=${app_bundle_hash}"
 Environment="COUNTER_FUNCTION=${counter_function}"
-ExecStart=/opt/capstone/.venv/bin/python /opt/capstone/server.py
+ExecStart=/opt/capstone/.venv/bin/python /opt/capstone/app/server.py
 Restart=always
 RestartSec=5
 TimeoutStopSec=30

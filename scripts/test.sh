@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REGION="${AWS_REGION:-us-east-1}"
 TERRAFORM_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../terraform" && pwd)"
 
 command -v terraform >/dev/null 2>&1 || {
@@ -10,12 +9,25 @@ command -v terraform >/dev/null 2>&1 || {
 }
 
 WEBSITE_URL="$(terraform -chdir="$TERRAFORM_DIR" output -raw website_url)"
-TABLE_NAME="$(terraform -chdir="$TERRAFORM_DIR" output -raw dynamodb_table_name)"
 
 printf 'Testing application URL: %s\n' "$WEBSITE_URL"
-curl -fsS "$WEBSITE_URL"
-printf '\n\nChecking DynamoDB counter...\n'
-aws dynamodb get-item \
-  --table-name "$TABLE_NAME" \
-  --key '{"counter_id":{"S":"homepage"}}' \
-  --region "$REGION"
+HOMEPAGE="$(curl -fsS "$WEBSITE_URL")"
+printf '%s' "$HOMEPAGE" | grep -q 'Built to stay'
+printf '%s' "$HOMEPAGE" | grep -q 'Total page visits'
+printf '%s' "$HOMEPAGE" | grep -Eq 'id="total-visits"[^>]*>[0-9][0-9,]*</div>' || {
+  printf 'Error: visitor counter did not return a numeric total.\n' >&2
+  exit 1
+}
+printf 'Dashboard page: OK\n'
+
+printf 'Checking ALB readiness endpoint...\n'
+curl -fsS "$WEBSITE_URL/health/ready"
+printf '\nChecking instance telemetry...\n'
+STATUS_JSON="$(curl -fsS "$WEBSITE_URL/api/status")"
+for field in status instance_id availability_zone region app_version uptime_seconds page_requests; do
+  printf '%s' "$STATUS_JSON" | grep -q "\"$field\":" || {
+    printf 'Error: status response is missing field %s.\n' "$field" >&2
+    exit 1
+  }
+done
+printf 'Dashboard API: OK\n'

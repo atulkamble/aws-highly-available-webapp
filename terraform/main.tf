@@ -14,6 +14,71 @@ data "archive_file" "counter_lambda" {
   output_path = "${path.module}/.terraform/counter-lambda.zip"
 }
 
+data "archive_file" "webapp" {
+  type        = "zip"
+  output_path = "${path.module}/.terraform/webapp.zip"
+
+  source {
+    content  = file("${path.module}/../app/server.py")
+    filename = "server.py"
+  }
+
+  source {
+    content  = file("${path.module}/../app/dashboard.css")
+    filename = "dashboard.css"
+  }
+
+  source {
+    content  = file("${path.module}/../app/dashboard.js")
+    filename = "dashboard.js"
+  }
+
+  source {
+    content  = file("${path.module}/../app/requirements.txt")
+    filename = "requirements.txt"
+  }
+}
+
+resource "aws_s3_bucket" "application_artifact" {
+  bucket_prefix = "${var.project_name}-app-"
+  force_destroy = true
+
+  tags = {
+    Name = "${var.project_name}-application-artifact"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "application_artifact" {
+  bucket                  = aws_s3_bucket.application_artifact.id
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "application_artifact" {
+  bucket = aws_s3_bucket.application_artifact.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
+}
+
+resource "aws_s3_object" "application_artifact" {
+  bucket       = aws_s3_bucket.application_artifact.id
+  key          = "releases/webapp.zip"
+  source       = data.archive_file.webapp.output_path
+  source_hash  = data.archive_file.webapp.output_base64sha256
+  content_type = "application/zip"
+
+  depends_on = [
+    aws_s3_bucket_public_access_block.application_artifact,
+    aws_s3_bucket_server_side_encryption_configuration.application_artifact,
+  ]
+}
+
 resource "aws_vpc" "main" {
   cidr_block           = var.vpc_cidr
   enable_dns_hostnames = true
@@ -223,6 +288,20 @@ resource "aws_iam_role_policy" "web_invoke_counter" {
   })
 }
 
+resource "aws_iam_role_policy" "web_read_application_artifact" {
+  name = "${var.project_name}-read-app-artifact"
+  role = aws_iam_role.web.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["s3:GetObject"]
+      Resource = aws_s3_object.application_artifact.arn
+    }]
+  })
+}
+
 resource "aws_iam_instance_profile" "web" {
   name = "${var.project_name}-web"
   role = aws_iam_role.web.name
@@ -239,8 +318,9 @@ resource "aws_launch_template" "web" {
 
   vpc_security_group_ids = [aws_security_group.web.id]
   user_data = base64encode(templatefile("${path.module}/user_data.sh.tftpl", {
-    app_source       = file("${path.module}/../app/server.py")
-    app_requirements = file("${path.module}/../app/requirements.txt")
+    app_bucket       = aws_s3_bucket.application_artifact.id
+    app_object_key   = aws_s3_object.application_artifact.key
+    app_bundle_hash  = data.archive_file.webapp.output_base64sha256
     aws_region       = var.aws_region
     counter_function = aws_lambda_function.counter.function_name
   }))
@@ -277,7 +357,7 @@ resource "aws_lb_target_group" "web" {
 
   health_check {
     enabled             = true
-    path                = "/health"
+    path                = "/health/ready"
     protocol            = "HTTP"
     matcher             = "200"
     interval            = 30
@@ -346,6 +426,8 @@ resource "aws_autoscaling_group" "web" {
     aws_route_table_association.public,
     aws_iam_role_policy_attachment.web_ssm,
     aws_iam_role_policy.web_invoke_counter,
+    aws_iam_role_policy.web_read_application_artifact,
+    aws_s3_object.application_artifact,
   ]
 
   lifecycle {

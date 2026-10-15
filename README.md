@@ -1,18 +1,21 @@
-# AWS Highly Available Web Application with Visitor Counter
+# AWS Highly Available Service Dashboard
 
-This project deploys a Python web application on EC2 instances in two Availability Zones. An internet-facing Application Load Balancer distributes HTTP traffic across the instances. Each page request invokes a Lambda function that atomically increments a visitor count in DynamoDB.
+This project deploys a live service dashboard to EC2 instances across two AWS Availability Zones. An internet-facing Application Load Balancer distributes requests across an EC2 Auto Scaling group. The dashboard reports a persistent global visit total alongside which instance and Availability Zone answered its latest status request, that instance's uptime, build version, and local page-request count.
 
-The complete infrastructure is managed with Terraform.
+The complete infrastructure is managed with Terraform. Deploy the stack from the repository root with `./deploy.sh`.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
-    User[Internet user] --> ALB[Application Load Balancer]
+    User[Students and users] --> ALB[Application Load Balancer]
     ALB --> ASG[EC2 Auto Scaling Group]
-    ASG --> Web[Python web application]
-    Web --> Lambda[Counter Lambda]
-    Lambda --> DDB[(DynamoDB)]
+    ASG --> Web[Python HA service dashboard]
+    Web --> Counter[Counter Lambda]
+    Counter --> Visits[(DynamoDB visit total)]
+    Web -. per-instance telemetry .-> Browser[Dashboard in browser]
+    Artifact[S3 private app artifact] --> EC2[EC2 bootstrap]
+    EC2 --> Web
 
     subgraph VPC[Application VPC across two Availability Zones]
         ALB
@@ -21,7 +24,9 @@ flowchart LR
     end
 ```
 
-The stack creates a VPC with two public subnets, an Internet Gateway, route table, security groups, and an ALB. The Auto Scaling group starts with two instances and scales between two and four instances using a 60% average CPU target. EC2 instances receive an IAM instance profile with SSM access and permission to invoke only the counter Lambda function.
+Terraform creates a VPC with two public subnets, an Internet Gateway, route table, security groups, an ALB, and an Auto Scaling group. The group starts with two instances, scales between two and four instances using a 60% average CPU target, and uses ALB health checks to replace unhealthy instances. EC2 receives SSM access, permission to invoke only the visitor-counter Lambda, and permission to download only the deployed app object from S3. Lambda atomically increments the persistent visit total in DynamoDB.
+
+Terraform packages the web app as a ZIP containing the Python server and dashboard assets, then uploads it to a private, encrypted S3 bucket. EC2 user data downloads the artifact at startup rather than embedding application source in the launch template. The app bundle hash is displayed as the build version and changing the bundle triggers an Auto Scaling instance refresh.
 
 ## Project structure
 
@@ -29,6 +34,8 @@ The stack creates a VPC with two public subnets, an Internet Gateway, route tabl
 aws-highly-available-webapp/
 ├── app/
 │   ├── server.py
+│   ├── dashboard.css
+│   ├── dashboard.js
 │   ├── requirements.txt
 │   └── test_server.py
 ├── terraform/
@@ -39,45 +46,42 @@ aws-highly-available-webapp/
 │   ├── user_data.sh.tftpl
 │   ├── variables.tf
 │   └── versions.tf
-└── scripts/
-    ├── cleanup.sh
-    ├── deploy.sh
-    └── test.sh
+├── scripts/
+│   ├── cleanup.sh
+│   ├── deploy.sh
+│   └── test.sh
+└── deploy.sh
 ```
 
 ## Prerequisites
 
 - Terraform 1.5 or later
 - AWS CLI configured with credentials for the target account
-- AWS permissions to create VPC/networking, EC2/Auto Scaling, ELB, Lambda, DynamoDB, IAM, and SSM-related resources
+- AWS permissions to create VPC/networking, EC2/Auto Scaling, ELB, S3, Lambda, DynamoDB, IAM, and SSM-related resources
 - `curl` to run the application smoke test
 
 Terraform uses the local state file at `terraform/terraform.tfstate` by default. Keep state private and back it up; it can contain infrastructure metadata. For team or production use, configure a remote, encrypted Terraform backend with locking before deployment.
 
-If you previously ran Terraform from the old `infra/` directory, move its `terraform.tfstate` (and `terraform.tfstate.backup`, if present) into `terraform/` before running the deployment script. Do not apply from the new directory until the existing state has been migrated, or Terraform may try to create a second stack.
+If you previously ran Terraform from the old `infra/` directory, move its state and backup into `terraform/` before running the deployment script. Do not apply from the new directory until existing state has been migrated, or Terraform may try to create a second stack.
 
-## Configure
+## Configure and deploy
 
-The defaults deploy to `us-east-1` with two `t3.micro` instances, matching the original capstone stack. Override the region and stack name using environment variables:
+By default, the project deploys to `us-east-1` with the stack name `aws-capstone`. You can override either value:
 
 ```bash
 export AWS_REGION=us-east-1
 export STACK_NAME=aws-capstone
 ```
 
-All infrastructure code and deployment state live in the top-level [terraform/](./terraform/) folder. The corresponding Terraform inputs are in [variables.tf](./terraform/variables.tf). The stack creates public subnets and allows public HTTP traffic to the load balancer; it is intended as a learning example, not a production-ready security design.
-
-## Deploy
-
-Deploy the complete project with one command from the repository root:
+Deploy the complete stack with one command from the repository root:
 
 ```bash
 ./deploy.sh
 ```
 
-This initializes Terraform, provisions the AWS infrastructure, launches the application on the EC2 Auto Scaling group, and prints the outputs including the website URL. It uses `AWS_REGION` and `STACK_NAME` when set; otherwise it deploys to `us-east-1` with the name `aws-capstone`. AWS credentials must already be configured.
+This initializes Terraform, provisions the AWS infrastructure, launches the dashboard, and prints outputs including the website URL. AWS credentials must already be configured. The stack creates public subnets and allows public HTTP traffic to the ALB; it is a teaching example, not a production-ready security design.
 
-For manual Terraform operations, all commands use the `terraform/` project directory:
+For manual Terraform operations:
 
 ```bash
 terraform -chdir=terraform init
@@ -91,42 +95,49 @@ terraform -chdir=terraform apply \
   -var="project_name=${STACK_NAME:-aws-capstone}"
 ```
 
-Terraform outputs include the website URL, ALB DNS name, DynamoDB table name, Lambda function name, and Auto Scaling group name. Open the `website_url` output in a browser; refreshing the page increments the visitor count.
+Terraform outputs include the website URL, ALB DNS name, Auto Scaling group name, visitor-counter DynamoDB table and Lambda names, and app bundle hash.
 
-> **Migrating from CloudFormation:** Terraform does not automatically adopt resources from an existing CloudFormation stack. Do not deploy this configuration over a live CloudFormation deployment with the same resource names. First plan a migration: either use a new `STACK_NAME` to create a parallel Terraform stack, or explicitly migrate/import resources and state. Deleting the old CloudFormation stack destroys its resources and data.
+> **Migrating from CloudFormation:** Terraform does not automatically adopt resources from a CloudFormation stack. Do not deploy this configuration over a live CloudFormation deployment with the same resource names. First plan a migration: either use a new stack name to create a parallel stack, or explicitly migrate/import resources and state. Deleting the old CloudFormation stack destroys its resources.
+
+## Dashboard and classroom demo
+
+Open the `website_url` output. The dashboard shows a persistent global page-visit total, incremented once whenever the homepage is requested and stored atomically in DynamoDB. `/api/status` polls every five seconds to show the instance that answered the latest status request, its Availability Zone and region, uptime, build version, and page requests served by that instance. The request count is per-instance, not a cluster-wide total. Status polling does not increment the global visit total. Reloading or polling through the ALB may reveal another instance; ALB routing is not guaranteed to alternate requests evenly.
+
+For a recovery demonstration:
+
+1. Keep the dashboard open and note the responding instance and zone.
+2. Refresh the status observation and compare the instance metadata returned through the ALB.
+3. In the EC2 console, terminate one instance belonging to this Auto Scaling group.
+4. Watch the ALB stop routing to the unhealthy target, then watch Auto Scaling launch a replacement and the dashboard return to healthy responses.
+
+The dashboard does not query AWS control-plane health or claim to show a count of healthy instances. Use the EC2 Auto Scaling and Target Groups consoles to observe those states directly.
 
 ## Test
 
-Run the smoke test to request the website and read the visitor item from DynamoDB:
+Run the live smoke test after deployment:
 
 ```bash
 ./scripts/test.sh
 ```
 
-The test reads `website_url` and `dynamodb_table_name` from the active Terraform state. You can inspect all outputs directly:
-
-```bash
-terraform -chdir=terraform output
-```
-
-## Application patterns for students
-
-The web app is a small, dependency-light Python HTTP service intended to demonstrate several production patterns:
-
-- **Configuration and startup:** deployment settings come from environment variables; invalid required settings stop startup with a clear error. Importing the module does not start the server.
-- **Health and routing:** `/health` is a lightweight load-balancer liveness check; `/health/ready` reports whether application configuration and the Lambda client are initialized. Readiness does not call Lambda, because doing so would increment the counter. Only `GET /` records a page view; favicon and unknown paths do not.
-- **Resilience:** a counter failure is logged and shown as temporarily unavailable while the rest of the page stays available. The Lambda SDK uses bounded timeouts and does not retry an increment whose result may be ambiguous.
-- **Security and operations:** the app HTML-escapes the displayed value, sets browser security headers, adds a per-request ID, and writes structured JSON logs to stdout. On an EC2 instance, inspect service logs with `sudo journalctl -u capstone`.
-- **Graceful concurrency:** a threaded HTTP server handles concurrent requests and waits for in-flight requests during shutdown.
-- **Dependency management:** runtime Python dependencies are declared in `app/requirements.txt` and installed in an isolated virtual environment during EC2 bootstrap.
-
-Run the focused tests locally with Python's standard library; AWS credentials and `boto3` are not required for these tests:
+It checks the dashboard page and numeric visitor total, the ALB readiness endpoint, and the instance telemetry API. Run the local application unit tests with Python's standard library; AWS credentials are not required:
 
 ```bash
 python3 -m unittest discover -s app -p 'test_*.py' -v
 ```
 
-This is a teaching example, not a claim that the whole deployment is production-ready. For example, the infrastructure still uses public HTTP and public subnets, does not ship application logs to CloudWatch, and does not deduplicate browser retries. A refresh or a repeated request to `/` is a new page view; an ambiguous network failure followed by a user retry can also result in an extra increment.
+## Application patterns for students
+
+- **Configuration and startup:** host, port, region, and app version are configured through environment variables. Invalid ports stop startup with a clear error, and importing the module does not start the server.
+- **Health and routing:** `/health` provides a lightweight liveness check and `/health/ready` is the ALB target health check. Neither changes dashboard metrics. `GET /` increments the global DynamoDB total once and the answering instance's in-memory page count.
+- **Counter resilience:** page rendering continues if the counter cannot be reached; the dashboard shows an unavailable message and the service logs a structured counter error. Lambda uses DynamoDB's atomic `ADD` update so simultaneous visits are not lost.
+- **Instance metadata:** the server uses IMDSv2 for the EC2 instance ID, Availability Zone, and region. When metadata is unavailable, such as during local development, it reports `local`.
+- **Concurrency and observability:** a threaded HTTP server uses a lock for request counters, adds a per-request ID, and writes structured JSON logs to stdout. On EC2, inspect service logs with `sudo journalctl -u capstone`.
+- **Security:** responses include browser security headers and a restrictive same-origin content security policy. The dashboard inserts API values as text rather than HTML.
+- **Background video:** the index page uses a muted CC0 video hosted by MDN's interactive examples. A dark overlay preserves text contrast, the existing gradient remains as a fallback, and playback is disabled when the browser requests reduced motion. The CSP allows media only from that video host.
+- **Deployment:** the app ZIP is stored in a private S3 bucket; the EC2 instance role has read access scoped to that artifact.
+
+This is a teaching example, not a claim that the whole deployment is production-ready. It uses public HTTP and public subnets, does not ship application logs to CloudWatch, and the dashboard's per-instance request counts reset when an instance is replaced. The DynamoDB-backed global visit count persists across instance replacement.
 
 ## Clean up
 
@@ -144,15 +155,16 @@ terraform -chdir=terraform destroy \
   -var="project_name=${STACK_NAME:-aws-capstone}"
 ```
 
-The cleanup script uses Terraform's current state and the configured stack name and region. Keep the state file until the destroy completes successfully.
+The cleanup script uses Terraform's current state and configured stack name and region. Keep the state file until destroy completes successfully.
 
 ## Security and operational considerations
 
 - The ALB accepts HTTP on port 80 from the internet; add ACM, HTTPS, and a custom domain for production.
 - The instances are in public subnets, although the web security group accepts application traffic only from the ALB.
-- EC2 bootstrap installs `boto3` from the package index at instance startup.
+- The application artifact is stored in a private S3 bucket with public access blocked and server-side encryption enabled; EC2 can read only the deployed app object.
+- EC2 bootstrap installs Python dependencies from the package index at instance startup.
 - Add monitoring, alarms, WAF, private subnets, egress controls, and a remote Terraform backend before production use.
-- The DynamoDB table uses on-demand billing and is removed when the Terraform stack is destroyed.
+- The DynamoDB counter table uses on-demand billing and is removed when the Terraform stack is destroyed.
 
 ## References
 

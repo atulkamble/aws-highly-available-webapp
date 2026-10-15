@@ -8,8 +8,13 @@ output "load_balancer_dns_name" {
   value       = aws_lb.web.dns_name
 }
 
+output "autoscaling_group_name" {
+  description = "Name of the web application Auto Scaling group."
+  value       = aws_autoscaling_group.web.name
+}
+
 output "dynamodb_table_name" {
-  description = "Name of the visitor counter DynamoDB table."
+  description = "Name of the persistent visitor counter DynamoDB table."
   value       = aws_dynamodb_table.counter.name
 }
 
@@ -18,7 +23,7 @@ output "lambda_function_name" {
   value       = aws_lambda_function.counter.function_name
 }
 
-output "autoscaling_group_name" {
-  description = "Name of the web application Auto Scaling group."
-  value       = aws_autoscaling_group.web.name
+output "app_bundle_hash" {
+  description = "Base64-encoded SHA-256 hash identifying the deployed application bundle."
+  value       = data.archive_file.webapp.output_base64sha256
 }
