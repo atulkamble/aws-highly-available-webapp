@@ -11,6 +11,7 @@ PAGE_TEMPLATE = """<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#0b1020">
   <meta name="description" content="A highly available web application powered by AWS.">
+  <link rel="icon" href="data:,">
   <title>Cloudnautic | AWS Cloud</title>
   <style>
     :root {
@@ -208,12 +209,22 @@ PAGE_TEMPLATE = """<!doctype html>
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        if urlparse(self.path).path == '/health':
+        request_path = urlparse(self.path).path
+        if request_path == '/health':
             self.send_response(200)
             self.send_header('Content-Length', '2')
             self.end_headers()
             self.wfile.write(b'ok')
             return
+        if request_path == '/favicon.ico':
+            self.send_response(204)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
+        if request_path != '/':
+            self.send_error(404)
+            return
+
         count = 'unavailable'
         try:
             response = lambda_client.invoke(FunctionName=os.environ['COUNTER_FUNCTION'], InvocationType='RequestResponse', Payload=b'{}')

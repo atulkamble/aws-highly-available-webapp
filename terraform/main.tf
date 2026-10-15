@@ -315,6 +315,15 @@ resource "aws_autoscaling_group" "web" {
     version = aws_launch_template.web.latest_version
   }
 
+  instance_refresh {
+    strategy = "Rolling"
+
+    preferences {
+      min_healthy_percentage = 50
+      instance_warmup        = 300
+    }
+  }
+
   dynamic "tag" {
     for_each = {
       for key, value in var.tags : key => value if key != "Name"
