@@ -1,7 +1,6 @@
 # AWS Highly Available Service Dashboard
 
 ## Objectives
-
 - Deploy a web application across two AWS Availability Zones.
 - Distribute HTTP requests and replace unhealthy application instances.
 - Demonstrate horizontal scaling, health checks, instance telemetry, and a persistent visit counter.
